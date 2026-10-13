@@ -15,6 +15,7 @@ from personal_ai_assistant.domain.types import TimeRange
 from personal_ai_assistant.providers.calendar import CalendarProvider
 from tests.fakes.calendar import FakeCalendarProvider
 from tests.fakes.clock import FakeClock
+from tests.fakes.google_calendar import FakeCalendarHttp, google_provider, to_google
 
 TPE = timezone(timedelta(hours=8))
 T0 = datetime(2026, 10, 14, 9, 0, tzinfo=TPE)
@@ -27,7 +28,20 @@ def _fake(events: Iterable[CalendarEvent], outage: str | None) -> CalendarProvid
     return FakeCalendarProvider(events, clock=FakeClock(T0), outage=outage)
 
 
-PROVIDERS: list[Factory] = [_fake]
+def _google(events: Iterable[CalendarEvent], outage: str | None) -> CalendarProvider:
+    # Real googleapiclient + adapter over a synthetic in-process endpoint; small
+    # pages so paging is exercised by every read test.
+    http = FakeCalendarHttp(
+        [to_google(e) for e in events],
+        page_size=1,
+        outage=(503, {"error": {"code": 503, "message": outage}}) if outage else None,
+    )
+    return google_provider(http, clock=FakeClock(T0))
+
+
+PROVIDERS: list[Factory] = [_fake, _google]
+# Providers that support writes; read-only adapters (Google, B4) are excluded.
+WRITABLE_PROVIDERS: list[Factory] = [_fake]
 
 
 def _event(event_id: str, start: datetime, hours: float | None) -> CalendarEvent:
@@ -78,8 +92,9 @@ def test_outage_is_reported_not_disguised_as_empty(factory: Factory) -> None:
         assert result.error
 
 
-def test_created_event_echoes_draft_and_is_listed(factory: Factory) -> None:
-    provider = factory([], None)
+@pytest.mark.parametrize("writable", WRITABLE_PROVIDERS, ids=lambda f: f.__name__)
+def test_created_event_echoes_draft_and_is_listed(writable: Factory) -> None:
+    provider = writable([], None)
     draft = EventDraft(title="Dentist", start=T0, end=T0 + timedelta(hours=1), location="Clinic")
     created = provider.create_event(draft)
     assert created.status is DataStatus.OK

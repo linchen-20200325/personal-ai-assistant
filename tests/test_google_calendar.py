@@ -273,6 +273,7 @@ def _error(status: int, reason: str = "x") -> tuple[int, dict[str, Any]]:
         (_error(403, "rateLimitExceeded"), DataStatus.ERROR, "rate limit"),
         (_error(403, "userRateLimitExceeded"), DataStatus.ERROR, "rate limit"),
         (_error(403, "forbidden"), DataStatus.UNAVAILABLE, "no permission"),
+        (_error(403, "accessNotConfigured"), DataStatus.UNAVAILABLE, "API is not enabled"),
         (_error(404, "notFound"), DataStatus.UNAVAILABLE, "calendar not found"),
         (_error(429, "rateLimitExceeded"), DataStatus.ERROR, "rate limit"),
         (_error(500, "backendError"), DataStatus.ERROR, "HTTP 500"),

@@ -25,8 +25,9 @@
 
 1. 安裝：`uv sync --extra google`（或 `pip install 'personal-ai-assistant[google]'`）。
 2. 準備 Desktop app OAuth client JSON，放在 **repo 外**（例如 `~/secrets/pai-oauth-client.json`），並執行 `chmod 600`。程式會拒絕位於任何 git repository 內、或可被其他使用者讀取的檔案。
-3. 授權（瀏覽器登入，只要求 `calendar.readonly`）：`uv run pai-google-auth login --client-secrets ~/secrets/pai-oauth-client.json`
-4. 啟用：`ASSISTANT_CALENDAR_PROVIDER=google`（可選 `ASSISTANT_GOOGLE_CALENDAR_ID`，預設 `primary`）。
-5. 檢查 / 移除：`pai-google-auth status`、`pai-google-auth logout`（完全撤銷請另到 Google 帳戶「第三方存取」移除）。
+3. （已有現成 OAuth client 時）先做唯讀檢查，不會印出任何 secret：`uv run pai-google-auth check --client-secrets <path>`；會檢查 Desktop 類型、必要欄位、loopback redirect、repo 外、`chmod 600`、OS keyring 與舊 token 的 scope 相容性。
+4. 授權（瀏覽器登入，只要求 `calendar.readonly`）：`uv run pai-google-auth login --client-secrets ~/secrets/pai-oauth-client.json`
+5. 啟用：`ASSISTANT_CALENDAR_PROVIDER=google`（可選 `ASSISTANT_GOOGLE_CALENDAR_ID`，預設 `primary`）。
+6. 檢查 / 移除：`pai-google-auth status`、`pai-google-auth logout`（完全撤銷請另到 Google 帳戶「第三方存取」移除）。
 
 授權結果的 scope 必須恰為 `calendar.readonly`，否則 token 不會被保存；keyring 中 scope 不符的 token 也會被拒用。

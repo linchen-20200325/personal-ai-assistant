@@ -1,6 +1,7 @@
 """``pai-google-auth``: authorize, inspect or remove read-only Google Calendar access.
 
     pai-google-auth login --client-secrets ~/secrets/pai-oauth-client.json
+    pai-google-auth check --client-secrets ~/secrets/pai-oauth-client.json
     pai-google-auth status
     pai-google-auth logout
 
@@ -42,6 +43,10 @@ def main(
     login_cmd.add_argument(
         "--no-browser", action="store_true", help="print the URL instead of opening a browser"
     )
+    check_cmd = commands.add_parser(
+        "check", help="read-only check of an existing OAuth client file and the keyring"
+    )
+    check_cmd.add_argument("--client-secrets", required=True, type=Path)
     commands.add_parser("status", help="show whether a valid read-only token is stored")
     commands.add_parser("logout", help="delete the stored token from the OS keyring")
     args = parser.parse_args(argv)
@@ -60,6 +65,15 @@ def main(
                 kwargs["flow_factory"] = flow_factory
             google_auth.login(args.client_secrets, token_store, **kwargs)
             show("授權完成：已將唯讀行事曆 token 存入 OS keyring。")
+        elif args.command == "check":
+            checks = [
+                *google_auth.check_client_file(args.client_secrets),
+                *google_auth.check_token_store(token_store),
+            ]
+            for ok, label in checks:
+                show(f"{'✔' if ok else '✘'} {escape_display(label)}")
+            show("（Calendar API 是否已啟用，需登入後第一次讀取時才能確認。）")
+            return EXIT_OK if all(ok for ok, _ in checks) else EXIT_FAILED
         elif args.command == "status":
             show(google_auth.status(token_store))
         else:

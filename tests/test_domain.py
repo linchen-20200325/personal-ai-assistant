@@ -51,6 +51,19 @@ class TestToolResult:
                 {"status": "error", "data": None, "provenance": None}, id="error-no-reason"
             ),
             pytest.param(
+                {"status": "ok", "data": [1], "provenance": PROV, "error": "x"}, id="ok-with-error"
+            ),
+            pytest.param(
+                {
+                    "status": "error",
+                    "data": None,
+                    "provenance": None,
+                    "error": "x",
+                    "missing": ("a",),
+                },
+                id="error-with-missing",
+            ),
+            pytest.param(
                 {"status": "unavailable", "data": None, "provenance": None, "error": ""},
                 id="unavailable-empty-reason",
             ),

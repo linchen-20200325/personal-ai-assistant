@@ -62,3 +62,19 @@ def test_timezone_is_validated() -> None:
         load_settings({"ASSISTANT_TIMEZONE": "Mars/Base"})
     with pytest.raises(ValidationError):
         load_settings({"ASSISTANT_TIMEZONE": "../../etc/passwd"})
+
+
+def test_calendar_provider_setting() -> None:
+    assert load_settings({}).calendar_provider == "none"
+    settings = load_settings(
+        {
+            "ASSISTANT_CALENDAR_PROVIDER": "google",
+            "ASSISTANT_GOOGLE_CALENDAR_ID": "team@example.com",
+        }
+    )
+    assert settings.calendar_provider == "google"
+    assert settings.google_calendar_id == "team@example.com"
+    with pytest.raises(ValidationError):
+        load_settings({"ASSISTANT_CALENDAR_PROVIDER": "outlook"})
+    with pytest.raises(ValidationError):
+        load_settings({"ASSISTANT_GOOGLE_CALENDAR_ID": "has space"})

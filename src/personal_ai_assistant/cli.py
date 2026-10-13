@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from personal_ai_assistant.audit import JsonlAuditSink
 from personal_ai_assistant.clock import Clock, system_clock
-from personal_ai_assistant.config import load_settings
+from personal_ai_assistant.config import Settings, load_settings
 from personal_ai_assistant.display import (
     escape_display,
     render_data,
@@ -33,6 +33,7 @@ from personal_ai_assistant.domain.risk import RiskLevel
 from personal_ai_assistant.planning.contracts import Planner
 from personal_ai_assistant.planning.llm_planner import LLMPlanner
 from personal_ai_assistant.planning.orchestrator import Orchestrator, Proposal
+from personal_ai_assistant.providers.calendar import CalendarProvider
 from personal_ai_assistant.providers.unconfigured import UnconfiguredProvider
 from personal_ai_assistant.safety.confirmation import (
     ConfirmationError,
@@ -97,10 +98,20 @@ def _discard_typeahead() -> None:
         pass
 
 
-def build_tools(provider: UnconfiguredProvider, *, clock: Clock = system_clock) -> list[Tool[Any]]:
+def build_tools(
+    provider: UnconfiguredProvider,
+    *,
+    clock: Clock = system_clock,
+    calendar: CalendarProvider | None = None,
+    calendar_read_only: bool = False,
+) -> list[Tool[Any]]:
+    """Tool registry. A read-only calendar does not offer ``calendar.create_event``."""
+    calendar_provider: CalendarProvider = provider if calendar is None else calendar
+    tools: list[Tool[Any]] = [ListEventsTool(calendar_provider)]
+    if not calendar_read_only:
+        tools.append(CreateEventTool(calendar_provider))
     return [
-        ListEventsTool(provider),
-        CreateEventTool(provider),
+        *tools,
         SearchEmailTool(provider),
         GetEmailTool(provider),
         CreateEmailDraftTool(provider),
@@ -256,12 +267,28 @@ def _build_planner(env: Mapping[str, str]) -> Planner:
     return LLMPlanner(AnthropicStructuredModel.from_settings(AnthropicSettings.from_env(env)))
 
 
+def _build_google_calendar(settings: Settings, clock: Clock) -> CalendarProvider:
+    # Imported lazily: the Google libraries are an optional extra.
+    from personal_ai_assistant.adapters.google_auth import (
+        KeyringTokenStore,
+        calendar_service_factory,
+    )
+    from personal_ai_assistant.adapters.google_calendar import GoogleCalendarProvider
+
+    return GoogleCalendarProvider(
+        calendar_service_factory(KeyringTokenStore()),
+        clock=clock,
+        calendar_id=settings.google_calendar_id,
+    )
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     env: Mapping[str, str] | None = None,
     console: Console | None = None,
     planner: Planner | None = None,
+    calendar: CalendarProvider | None = None,
     clock: Clock = system_clock,
 ) -> int:
     parser = argparse.ArgumentParser(
@@ -290,6 +317,14 @@ def main(
             console.show(f"LLM 設定錯誤：{escape_display(str(exc))}")
             return EXIT_CONFIG
 
+    calendar_read_only = settings.calendar_provider == "google"
+    if calendar is None and calendar_read_only:
+        try:
+            calendar = _build_google_calendar(settings, clock)
+        except ImportError:
+            console.show("缺少 Google 套件：請安裝 extra `personal-ai-assistant[google]`。")
+            return EXIT_CONFIG
+
     text = " ".join(args.request).strip()
     if not text:
         answer = console.ask("你想做什麼？ ")
@@ -301,7 +336,12 @@ def main(
     confirmations = ConfirmationStore(audit=audit, clock=clock)
     try:
         executor = ActionExecutor(
-            build_tools(UnconfiguredProvider(), clock=clock),
+            build_tools(
+                UnconfiguredProvider(),
+                clock=clock,
+                calendar=calendar,
+                calendar_read_only=calendar_read_only,
+            ),
             policy=settings.policy,
             confirmations=confirmations,
             audit=audit,

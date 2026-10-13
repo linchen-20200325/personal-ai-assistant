@@ -6,11 +6,38 @@ from pathlib import Path
 import personal_ai_assistant
 
 PACKAGE = Path(personal_ai_assistant.__file__).parent
-ADAPTER = PACKAGE / "adapters" / "anthropic_model.py"
+ADAPTERS = PACKAGE / "adapters"
+# Which vendor packages each adapter module may import.
+ALLOWED_VENDORS = {
+    "anthropic_model.py": {"anthropic"},
+    "google_auth.py": {
+        "google",
+        "googleapiclient",
+        "google_auth_oauthlib",
+        "google_auth_httplib2",
+        "httplib2",
+        "keyring",
+        "requests",
+    },
+    "google_calendar.py": {"google", "googleapiclient", "httplib2"},
+}
 CLI = PACKAGE / "cli.py"
 CORE_DIRS = ("domain", "safety", "tools", "providers", "planning")
 CORE_MODULES = ("audit.py", "clock.py", "config.py", "validation.py", "display.py")
-VENDOR_SDKS = ("anthropic", "openai", "mcp", "httpx", "httpx2")
+VENDOR_SDKS = (
+    "anthropic",
+    "openai",
+    "mcp",
+    "httpx",
+    "httpx2",
+    "google",
+    "googleapiclient",
+    "google_auth_oauthlib",
+    "google_auth_httplib2",
+    "httplib2",
+    "keyring",
+    "requests",
+)
 
 
 def _modules() -> list[Path]:
@@ -47,13 +74,24 @@ def test_core_list_is_not_empty() -> None:
     assert "audit.py" in names
 
 
-def test_only_the_adapter_imports_vendor_sdks() -> None:
-    offenders = {
-        p.relative_to(PACKAGE).as_posix(): sorted(i for i in _imports(p) if _top(i) in VENDOR_SDKS)
-        for p in _modules()
-        if p != ADAPTER
+def test_vendor_sdks_only_in_their_adapters() -> None:
+    offenders = {}
+    for path in _modules():
+        allowed = ALLOWED_VENDORS.get(path.name, set()) if path.parent == ADAPTERS else set()
+        bad = sorted(i for i in _imports(path) if _top(i) in VENDOR_SDKS and _top(i) not in allowed)
+        if bad:
+            offenders[path.relative_to(PACKAGE).as_posix()] = bad
+    assert offenders == {}
+
+
+def test_google_calendar_adapter_requests_readonly_scope_only() -> None:
+    source = (ADAPTERS / "google_auth.py").read_text(encoding="utf-8")
+    scopes = {
+        token
+        for token in source.replace('"', " ").split()
+        if token.startswith("https://www.googleapis.com/auth/") or token.startswith("https://mail")
     }
-    assert {k: v for k, v in offenders.items() if v} == {}
+    assert scopes == {"https://www.googleapis.com/auth/calendar.readonly"}
 
 
 def test_core_never_imports_adapters_or_cli() -> None:

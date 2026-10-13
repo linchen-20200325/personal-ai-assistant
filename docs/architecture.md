@@ -34,6 +34,9 @@
 | `planning/orchestrator.py` | `Orchestrator`：request → planner → 整份計畫驗證 → audit → 逐一交給 `ActionExecutor` |
 | `adapters/anthropic_model.py` | Anthropic Messages API 的 `StructuredModel` 實作（唯一可 import `anthropic` 的模組） |
 | `providers/unconfigured.py` | 尚未接上真實服務前的 provider：一律回 `UNAVAILABLE` |
+| `adapters/google_auth.py` | Google OAuth 邊界：只要求 / 只接受 `calendar.readonly`；token 只存 OS keyring；OAuth client 檔必須在 repo 外 |
+| `adapters/google_calendar.py` | `GoogleCalendarProvider`：Calendar v3 `events.list` 唯讀；分頁、對應、驗證、錯誤語意；`create_event` 一律拒絕 |
+| `google_auth_cli.py` | `pai-google-auth login / status / logout` |
 | `display.py` | 終端安全顯示：escape 控制 / bidi / 零寬字元 |
 | `cli.py` | `pai` 指令：composition root + 人工確認通道（唯一呼叫 `ConfirmationStore.approve` 的地方） |
 
@@ -127,8 +130,23 @@ ActionExecutor.submit(…, plan_id)  既有流程：validate → risk → gate
 |---|---|
 | B2 ✅ | Email / Document / Notes / Reminder 介面 + fake；`docs/integrations.md` |
 | B3 ✅ | Orchestrator、Planner Protocol、Anthropic adapter、CLI 確認通道 |
-| B4 | Google 唯讀 adapters（GCP / OAuth / token 存放待裁示） |
+| B4 ✅ | Google Calendar 唯讀 adapter（`calendar.readonly`、OS keyring）；Gmail / Drive 未做 |
 | V2+ | 寫入 adapters、持久化 pending store、audit hash chain、taint escalation、受控 booking（見 security.md） |
 
 `ConfirmationStore` 目前為 in-memory：重啟後所有 pending 失效（fail closed）；過期記錄於建立新 pending 時清除。
-`pai` CLI 目前所有 provider 皆為 `UnconfiguredProvider`（回 `UNAVAILABLE`）；真實資料待 B4 adapters。
+`pai` CLI：`ASSISTANT_CALENDAR_PROVIDER=google` 時行事曆改用 `GoogleCalendarProvider`，且**不註冊** `calendar.create_event`（planner 看不到寫入 tool）；其餘 provider 仍為 `UnconfiguredProvider`（回 `UNAVAILABLE`）。
+
+### Google Calendar 對應規則（DATA ≠ AI）
+
+| Google 欄位 | Domain | 規則 |
+|---|---|---|
+| `id` | `event_id` | 缺少 / 非字串 → 丟棄該事件並列入 `missing` |
+| `start.dateTime` / `start.date` | `start` | `dateTime` 必須帶 offset（保留原 offset）；全天 `date` 以事件或日曆自身時區的 00:00 表示；兩者皆無時區 → 丟棄並列入 `missing`（不猜） |
+| `end` | `end` | 缺少 → `None`；無法解析或不晚於 start → `None` 並列入 `missing` |
+| `summary` / `location` | `title` / `location` | 缺少 → `None`；型別錯誤 → `None` 並列入 `missing` |
+| `attendees` | `attendees` | 欄位缺少或 `attendeesOmitted` → `None`（未知，非「沒有」）；任一地址不是純 addr-spec → 整個欄位 `None` 並列入 `missing`（不裁剪） |
+| `status=cancelled` | — | 略過 |
+
+分頁上限 `MAX_PAGES × 250`；超過時回 `PARTIAL` 並標示 `events_beyond_page_limit`。`items` 缺漏或回應形狀不符 → `ERROR`（不當成空清單）。
+
+錯誤語意：401 / token 失效 → `UNAVAILABLE`（提示重新 `pai-google-auth login`）；403 權限 / 404 → `UNAVAILABLE`；429、403 rate limit、5xx、網路 → `ERROR`。訊息為固定字串，不含回應內容或 token。

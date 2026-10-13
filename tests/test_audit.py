@@ -1,5 +1,6 @@
 import json
 import stat
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -56,12 +57,26 @@ class TestRedaction:
             f'client_secret="{SECRET}"',
             f"Authorization: Basic {SECRET}",
             f"X-Api-Key={SECRET}",
+            f'{{"access_token": "{SECRET}", "expires_in": 3600}}',
+            f"https://api.example.com/v1?token={SECRET}&page=2",
+            f"pwd={SECRET}",
         ],
     )
     def test_credential_assignments_in_free_text_are_masked(self, text: str) -> None:
         out = redact_text(text)
         assert SECRET not in out
         assert REDACTED in out
+
+    @pytest.mark.parametrize(
+        "text", ["Basic training session: Room 4", "token budget exceeded", "Bearer of bad news"]
+    )
+    def test_ordinary_text_is_not_mangled(self, text: str) -> None:
+        assert redact_text(text) == text
+
+    def test_pathological_input_is_fast(self) -> None:
+        started = time.perf_counter()
+        redact_text("token." * 50_000)
+        assert time.perf_counter() - started < 1.0
 
     def test_long_text_is_truncated(self) -> None:
         assert len(redact("x" * 10_000)) < MAX_TEXT_LENGTH + 20

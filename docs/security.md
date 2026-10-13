@@ -63,7 +63,7 @@
 - 不得 commit token、API key、密碼或 OAuth credentials；`.gitignore` 已涵蓋 `.env*`、`credentials*.json`、`token*.json`、`client_secret*.json`、`*.pem`、`*.key`。
 - `.env.example` 只含 placeholder；目前尚未定義任何 secret（provider 憑證隨 B3/B4 adapter 引入，屆時型別為 `SecretStr`，經環境變數或 secret manager 提供）。
 - CI 以 gitleaks 掃描完整 git 歷史。測試中的合成假值以 `gitleaks:allow` 標註。
-- Audit：參數中 key 名稱符合 `token|secret|passw|authoriz|api_key|cookie|credential|session|body|content` 的值會被遮蔽；Bearer token 與 Email local part 會被遮蔽；長字串截斷。這是 best effort，**不得**把 secrets 放在一般欄位的自由文字中。
+- Audit：參數中 key 名稱符合 `token|secret|passw|authoriz|api_key|cookie|credential|session|body|content` 的值會被遮蔽；自由文字中的憑證指派（`key=value`、`key: value`、JSON `"key": "value"`、`Authorization: Basic …`）、Bearer token 與 Email local part 會被遮蔽；字串先截斷至 256 字元再比對，regex 皆為有界量詞，避免 ReDoS。這是 best effort，**不得**把 secrets 放在一般欄位的自由文字中。
 - Audit 檔案以 `0600` 權限建立，預設位於 `var/`（已 gitignore）。
 - 測試只使用合成資料（`example.com`），repository 內不得放真實個資。
 - 最小權限：未來 OAuth scope 先申請唯讀，寫入 scope 逐項加入。

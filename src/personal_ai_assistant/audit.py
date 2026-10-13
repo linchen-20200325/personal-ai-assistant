@@ -2,8 +2,8 @@
 
 Redaction happens inside ``AuditEvent`` validation, so no code path can write
 unredacted params or reasons to a sink. Redaction is best effort (sensitive key
-names, ``key=value`` / ``key: value`` credential assignments, Bearer/Basic
-credentials, e-mail local parts, length cap); secrets hidden in free text
+names, ``key=value`` / ``key: value`` / JSON-style credential assignments,
+bearer tokens, e-mail local parts, length cap); secrets hidden in free text
 without such markers are not detectable and must not be passed in.
 """
 
@@ -26,23 +26,30 @@ _SENSITIVE_KEY = re.compile(
     r"token|secret|passw|authori[sz]|api[_-]?key|cookie|credential|session|body|content",
     re.IGNORECASE,
 )
-_AUTH_SCHEME = re.compile(r"\b(bearer|basic)\s+\S+", re.IGNORECASE)
-# "<something sensitive>=<value>" / ": <value>" inside free text (e.g. provider error strings).
+# Standalone bearer tokens ("Bearer <long token>").
+_BEARER = re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE)
+# Credential assignments in free text: key=value, key: value, "key": "value",
+# including "Authorization: Basic xyz". Quantifiers are bounded to avoid
+# catastrophic backtracking; input length is capped before matching anyway.
 _ASSIGNMENT = re.compile(
-    r"\b([\w.-]*(?:token|secret|passw|api[_-]?key|credential|cookie|session)[\w.-]*)"
-    r"(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)",
+    r"(?<![\w.-])([\w.-]{0,64}?"
+    r"(?:token|secret|passw|pwd|api[_-]?key|credential|cookie|session[_-]?id|authori[sz]ation)"
+    r"[\w.-]{0,64})"
+    r"([\"']?\s*[=:]\s*)"
+    r"((?:(?:bearer|basic|digest)\s+)?(?:\"[^\"]*\"|'[^']*'|[^\s,;&]+))",
     re.IGNORECASE,
 )
 _EMAIL = re.compile(r"([^@\s\"'<>(),;:]+)@([^@\s\"'<>(),;:]+)")
 
 
 def redact_text(text: str) -> str:
-    text = _AUTH_SCHEME.sub(lambda m: f"{m.group(1)} {REDACTED}", text)
+    # Truncate first: bounds regex work regardless of input size.
+    truncated = len(text) > MAX_TEXT_LENGTH
+    text = text[:MAX_TEXT_LENGTH]
     text = _ASSIGNMENT.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
+    text = _BEARER.sub(f"Bearer {REDACTED}", text)
     text = _EMAIL.sub(lambda m: f"{m.group(1)[0]}***@{m.group(2)}", text)
-    if len(text) > MAX_TEXT_LENGTH:
-        text = text[:MAX_TEXT_LENGTH] + "...[truncated]"
-    return text
+    return text + "...[truncated]" if truncated else text
 
 
 def redact(value: Any, _depth: int = 0) -> Any:

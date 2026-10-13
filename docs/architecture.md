@@ -4,8 +4,8 @@
 
 1. **一個 Orchestrator，多個薄 Tool**：不建立多套重複的 Agent。
 2. **DATA ≠ AI ANALYSIS**：provider 只負責取得、標準化、驗證、標註 provenance；AI 層只讀取已取得的資料，不得補造缺值。
-3. **Provider-neutral**：核心（domain / safety / tools / providers 介面）不依賴任何 LLM、MCP 或特定服務 SDK。`ruff` 的 `banned-api` 規則在 CI 強制禁止核心 import `anthropic`、`openai`、`mcp`。
-4. **YAGNI**：每個 module / dependency 都要有當下用途。Runtime 依賴只有 `pydantic`。
+3. **Provider-neutral**：核心（domain / safety / tools / providers / planning）不依賴任何 LLM、MCP 或特定服務 SDK。`ruff` 的 `banned-api` 規則在 CI 強制禁止 import `anthropic`、`openai`、`mcp`，唯一例外是 `adapters/anthropic_model.py`（per-file 豁免）；`tests/test_architecture.py` 另以 AST 確認核心不 import `adapters` / `cli`。
+4. **YAGNI**：每個 module / dependency 都要有當下用途。核心 runtime 依賴只有 `pydantic`；Anthropic SDK 是 optional extra（`personal-ai-assistant[anthropic]`），只有 CLI 在執行時延遲載入。
 
 ## 模組
 
@@ -27,9 +27,60 @@
 | `safety/confirmation.py` | `PendingAction`、digest、`ConfirmationStore` |
 | `safety/executor.py` | `ActionExecutor`：唯一執行入口 |
 | `audit.py` | `AuditEvent`（建構時即遮蔽）、`JsonlAuditSink` |
-| `config.py` | 從 `ASSISTANT_*` 環境變數載入 `Settings` |
+| `config.py` | 從 `ASSISTANT_*` 環境變數載入 `Settings`（含 `ASSISTANT_TIMEZONE`） |
+| `validation.py` | `validation_summary()`：驗證錯誤只輸出位置與類型（executor 與 planner 共用） |
+| `planning/contracts.py` | Provider-neutral 契約：`Plan` / `ProposedAction`、`Planner` Protocol、`StructuredModel` port、`PlanningError` |
+| `planning/llm_planner.py` | `LLMPlanner`：組 prompt + 封閉 JSON schema，呼叫 `StructuredModel`，在本地嚴格驗證輸出 |
+| `planning/orchestrator.py` | `Orchestrator`：request → planner → 整份計畫驗證 → audit → 逐一交給 `ActionExecutor` |
+| `adapters/anthropic_model.py` | Anthropic Messages API 的 `StructuredModel` 實作（唯一可 import `anthropic` 的模組） |
+| `providers/unconfigured.py` | 尚未接上真實服務前的 provider：一律回 `UNAVAILABLE` |
+| `display.py` | 終端安全顯示：escape 控制 / bidi / 零寬字元 |
+| `cli.py` | `pai` 指令：composition root + 人工確認通道（唯一呼叫 `ConfirmationStore.approve` 的地方） |
 
 ## 執行流程
+
+### B3：自然語言 → 計畫 → 閘門 → 確認 → 執行
+
+```
+pai "明天下午幫我加一個牙醫行程"
+  │
+  ▼
+Orchestrator.propose()          空字串 / 超過 2000 字 → plan.rejected（不呼叫 LLM）
+  │ PlanningRequest(text, executor.specs(), 本地時間含 offset)
+  ▼
+Planner（LLMPlanner → StructuredModel port → Anthropic adapter）
+  │ 原始 JSON 文字（不受信任）
+  ▼
+parse_plan()                    嚴格 JSON（拒 NaN/Infinity、重複 key）→ 封閉 schema → 大小上限
+  │                             任何錯誤 → plan.rejected；模型/網路錯誤 → plan.failed
+  ▼
+整份計畫驗證                     任一動作 tool 未註冊或 params 不合 input model → 整份拒絕（不部分執行）
+  │ plan.created（只記 tool 名稱與問題數，不記使用者文字或模型文字）；audit 失敗 → 丟棄計畫
+  ▼
+CLI 顯示計畫                     planner 說明標示「未經驗證」；所有文字經 escape_display
+  ▼
+ActionExecutor.submit(…, plan_id)  既有流程：validate → risk → gate
+  ├─ READ / DRAFT / 白名單 WRITE_LOW → 執行 + audit
+  ├─ DENY（未知、寫入關閉…）→ 顯示原因
+  └─ CONFIRM → PendingAction
+        ▼
+     CLI 確認畫面：由 pending.params_json 產生（digest 涵蓋的內容），WRITE_HIGH 另加警示
+     非互動式終端 → 直接 reject；必須輸入 `yes`，其他任何輸入 / EOF → reject
+        ▼
+     ConfirmationStore.approve(digest) → ActionExecutor.execute_approved()（既有重驗證）
+```
+
+`Plan` 沒有任何 risk / approval / identity 欄位且 `extra="forbid"`，LLM 無法自行宣告風險或核准；
+風險只由 tool 宣告與 `assess_risk` 決定，權限只由 `decide()` 決定。
+
+**Planner 契約（provider-neutral）**：
+
+- `Planner.plan(PlanningRequest) -> Plan`，失敗只拋 `PlanningError`（`InvalidPlanError` / `ModelUnavailableError`），訊息可安全顯示與 audit。
+- `StructuredModel.generate(StructuredRequest) -> str`：adapter 只負責傳輸，回傳原始 JSON 文字；驗證在核心。
+- Tool 參數以 `arguments_json`（JSON 字串）傳遞，讓輸出 schema 全部 `additionalProperties: false`（各家 structured output 的共同要求）；核心再解碼、驗證。
+- 新增 OpenAI 等供應商：在 `adapters/` 實作 `StructuredModel`，並在 `pyproject.toml` 加 per-file 豁免；核心不需修改。
+
+**B3 範圍限制**：單輪規劃，tool 結果不回送 LLM（因此外部內容不會進入 prompt，沒有 prompt injection 面）；CLI 直接顯示 provider 資料（DATA），不做 LLM 摘要。多輪 / 摘要留待後續 Batch。
 
 ### `ActionExecutor.submit(PlannedAction)`
 
@@ -75,9 +126,9 @@
 | Batch | 內容 |
 |---|---|
 | B2 ✅ | Email / Document / Notes / Reminder 介面 + fake；`docs/integrations.md` |
-| B3 | Orchestrator：Planner Protocol、LLM adapter（供應商待裁示）、CLI 確認通道 |
+| B3 ✅ | Orchestrator、Planner Protocol、Anthropic adapter、CLI 確認通道 |
 | B4 | Google 唯讀 adapters（GCP / OAuth / token 存放待裁示） |
 | V2+ | 寫入 adapters、持久化 pending store、audit hash chain、taint escalation、受控 booking（見 security.md） |
 
 `ConfirmationStore` 目前為 in-memory：重啟後所有 pending 失效（fail closed）；過期記錄於建立新 pending 時清除。
-`config.load_settings()` 目前只有測試在使用，B3 的 CLI 會是第一個實際使用它的地方。
+`pai` CLI 目前所有 provider 皆為 `UnconfiguredProvider`（回 `UNAVAILABLE`）；真實資料待 B4 adapters。

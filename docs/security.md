@@ -32,6 +32,11 @@
 | 8 | naive datetime → DENY | `AwareDatetime`；另拒絕數字 / 數字字串 timestamp（避免被靜默解讀為 UTC）與非整分鐘 offset（避免 digest 不穩定） | |
 | 9 | Audit 遮蔽 secrets | `AuditEvent` 建構時遮蔽；驗證錯誤只記位置/類型，planner 送來的多餘 key 名稱以 `<extra>` 取代；tool 例外只記類型名稱；provider 錯誤字串在寫入 audit 與回傳 planner 前都經遮蔽 | 寫入磁碟後檢查 |
 | 10 | Planner 無法繞過 executor | `PlannedAction` 只有 `tool`、`params`；executor 公開介面僅 `specs/submit/execute_approved`；tool 實例為私有；AST 架構測試確保只有 executor 呼叫 `.run()` | `test_executor.py` |
+| 11 | LLM 輸出一律本地驗證、不猜測 | 嚴格 JSON（拒 NaN/Infinity、重複 key）、封閉 schema（`extra="forbid"`）、缺欄位不補預設、型別不轉換、大小上限；任一動作無效 → 整份計畫拒絕 | `test_llm_planner.py`、`test_orchestrator.py` |
+| 12 | LLM 無法提升權限 | `Plan` 無 risk/approval 欄位；風險由 tool 決定；WRITE_HIGH（例如含 attendees 的行程）即使在 `auto_write_low` 白名單仍需確認 | `test_orchestrator.py` |
+| 13 | 只有人類能核准 | `ConfirmationStore.approve` 只在 `cli.py` 呼叫（AST 測試）；需互動式 TTY 且輸入 `yes`；確認畫面由 `params_json` 產生並 escape bidi / 零寬 / 控制字元 | `test_cli.py`、`test_architecture.py`、`test_display.py` |
+| 14 | Vendor SDK 隔離 | `anthropic` 只能在 `adapters/anthropic_model.py` import（ruff + AST）；SDK 例外轉為固定訊息的 `ModelUnavailableError`，且 `from None` 切斷例外鏈 | `test_anthropic_adapter.py`、`test_architecture.py` |
+| 15 | API key 不外洩 | 只從 `ANTHROPIC_API_KEY` 環境變數讀入 `SecretStr`；設定錯誤訊息只列欄位名稱；audit 不記使用者文字與模型輸出 | `test_anthropic_adapter.py`、`test_cli.py`（寫檔後檢查） |
 
 另：
 - 執行前的 audit 寫入失敗時，side effect **不會**執行（fail closed）。
@@ -39,7 +44,9 @@
 
 ## 已知限制與後續 Batch 的要求
 
-- **外部內容不受信任（prompt injection）**：Email 內文、文件內容、行事曆描述等由 provider 取得的文字，在 B3 送入 LLM 時必須標示為資料而非指令；寫入類動作仍一律經 risk gate。V2 規劃：讀過外部內容後提高 WRITE_LOW 的確認要求（taint escalation）。
+- **外部內容不受信任（prompt injection）**：B3 為單輪規劃，tool 結果**不**回送 LLM，因此 provider 取得的外部文字不會進入 prompt。日後加入多輪 / 摘要時，外部內容必須標示為資料而非指令；寫入類動作仍一律經 risk gate。V2 規劃：讀過外部內容後提高 WRITE_LOW 的確認要求（taint escalation）。
+- **送往 LLM 的資料**：使用者輸入的請求文字、tool 目錄（名稱、描述、schema）與目前本地時間會送到 Anthropic API；不送 audit、設定或憑證。
+- **Anthropic adapter**：測試以 mock HTTP transport 進行，CI 不會呼叫真實 API、不消耗額度。SDK 內建重試（408/409/429/5xx，`max_retries=2`）與 timeout（預設 60 秒）。模型拒答（`refusal`）或輸出被截斷（非 `end_turn`）一律視為失敗，不嘗試修補。
 - **Email**：目前只有讀取與存草稿（DRAFT），沒有寄送 tool。寄送屬 WRITE_HIGH，加入前需客戶裁示。收件人只接受單一純 addr-spec（防止夾帶額外收件人）；主旨等單行欄位拒絕控制字元（CR/LF）。Audit 中 `body`、`subject`、`text` 欄位遮蔽，收件人地址遮蔽 local part。
 - **DRAFT 不受 `writes_enabled` 限制**：依核准的風險模型，DRAFT 可自主執行，因此即使寫入關閉，仍可建立遠端草稿（不會寄出）。若日後希望草稿也需確認或有數量上限，屬產品規則調整。
 
@@ -65,7 +72,7 @@
 ## Secrets 與隱私
 
 - 不得 commit token、API key、密碼或 OAuth credentials；`.gitignore` 已涵蓋 `.env*`、`credentials*.json`、`token*.json`、`client_secret*.json`、`*.pem`、`*.key`。
-- `.env.example` 只含 placeholder；目前尚未定義任何 secret（provider 憑證隨 B3/B4 adapter 引入，屆時型別為 `SecretStr`，經環境變數或 secret manager 提供）。
+- `.env.example` 只含 placeholder。唯一的 secret 是 `ANTHROPIC_API_KEY`（`SecretStr`，只經環境變數提供）；Google 憑證隨 B4 adapter 引入。
 - CI 以 gitleaks 掃描完整 git 歷史。測試中的合成假值以 `gitleaks:allow` 標註。
 - Audit：參數中 key 名稱符合 `token|secret|passw|authoriz|api_key|cookie|credential|session|body|content` 的值會被遮蔽；自由文字中的憑證指派（`key=value`、`key: value`、JSON `"key": "value"`、`Authorization: Basic …`）、Bearer token 與 Email local part 會被遮蔽；字串先截斷至 256 字元再比對，regex 皆為有界量詞，避免 ReDoS。這是 best effort，**不得**把 secrets 放在一般欄位的自由文字中。
 - Audit 檔案以 `0600` 權限建立，預設位於 `var/`（已 gitignore）。

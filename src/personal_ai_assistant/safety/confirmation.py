@@ -1,9 +1,12 @@
 """Human confirmation of pending actions.
 
 A ``PendingAction`` pins the exact canonical params by SHA-256 digest. It can
-be approved only by presenting that digest (i.e. what the human was shown),
-only before it expires, and consumed at most once. Approval is performed by a
-human-facing channel (CLI / UI) holding this store; no tool can approve.
+be approved only by presenting that digest, only before it expires, and
+consumed at most once; execution re-derives the digest from the stored params.
+The human channel must render the confirmation from ``params_json`` (never from
+planner-written text) so the approved digest covers exactly what was shown.
+Approval is performed by a human-facing channel (CLI / UI) holding this store;
+no tool can approve.
 """
 
 import hashlib
@@ -85,6 +88,10 @@ class ConfirmationStore:
             expires_at=now + ttl,
         )
         with self._lock:
+            # Expired records can never be approved or consumed; drop them so a
+            # planner repeatedly proposing writes cannot grow memory unboundedly.
+            for stale in [k for k, r in self._records.items() if now >= r.pending.expires_at]:
+                del self._records[stale]
             self._records[pending.pending_id] = _Record(pending, PendingStatus.PENDING)
         return pending
 

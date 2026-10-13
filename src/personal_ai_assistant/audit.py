@@ -1,9 +1,10 @@
 """Append-only audit trail.
 
 Redaction happens inside ``AuditEvent`` validation, so no code path can write
-unredacted params or reasons to a sink. Redaction is best effort (key names,
-bearer tokens, e-mail local parts, length cap); secrets hidden in free text
-under innocuous keys are not detectable and must not be passed in.
+unredacted params or reasons to a sink. Redaction is best effort (sensitive key
+names, ``key=value`` / ``key: value`` credential assignments, Bearer/Basic
+credentials, e-mail local parts, length cap); secrets hidden in free text
+without such markers are not detectable and must not be passed in.
 """
 
 import os
@@ -25,12 +26,19 @@ _SENSITIVE_KEY = re.compile(
     r"token|secret|passw|authori[sz]|api[_-]?key|cookie|credential|session|body|content",
     re.IGNORECASE,
 )
-_BEARER = re.compile(r"\bbearer\s+\S+", re.IGNORECASE)
+_AUTH_SCHEME = re.compile(r"\b(bearer|basic)\s+\S+", re.IGNORECASE)
+# "<something sensitive>=<value>" / ": <value>" inside free text (e.g. provider error strings).
+_ASSIGNMENT = re.compile(
+    r"\b([\w.-]*(?:token|secret|passw|api[_-]?key|credential|cookie|session)[\w.-]*)"
+    r"(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)",
+    re.IGNORECASE,
+)
 _EMAIL = re.compile(r"([^@\s\"'<>(),;:]+)@([^@\s\"'<>(),;:]+)")
 
 
 def redact_text(text: str) -> str:
-    text = _BEARER.sub(f"Bearer {REDACTED}", text)
+    text = _AUTH_SCHEME.sub(lambda m: f"{m.group(1)} {REDACTED}", text)
+    text = _ASSIGNMENT.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
     text = _EMAIL.sub(lambda m: f"{m.group(1)[0]}***@{m.group(2)}", text)
     if len(text) > MAX_TEXT_LENGTH:
         text = text[:MAX_TEXT_LENGTH] + "...[truncated]"
@@ -85,7 +93,7 @@ class AuditEvent(BaseModel):
     def _redact_params(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         return None if value is None else redact(value)
 
-    @field_validator("tool", "reason", mode="after")
+    @field_validator("tool", "pending_id", "reason", mode="after")
     @classmethod
     def _redact_text(cls, value: str | None) -> str | None:
         return None if value is None else redact_text(value)

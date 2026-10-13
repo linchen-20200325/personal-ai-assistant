@@ -147,3 +147,12 @@ class TestTtl:
         clock.advance(timedelta(seconds=1))
         with pytest.raises(ConfirmationError, match="expired"):
             store.consume(pending.pending_id)
+
+    def test_expired_records_are_swept_on_create(
+        self, store: ConfirmationStore, clock: FakeClock
+    ) -> None:
+        old = _create(store)
+        clock.advance(TTL)
+        fresh = _create(store)
+        assert store.status(old.pending_id) is None
+        assert store.status(fresh.pending_id) is PendingStatus.PENDING

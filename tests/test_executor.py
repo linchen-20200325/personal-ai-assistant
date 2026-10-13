@@ -482,6 +482,43 @@ def test_audit_failure_prevents_execution() -> None:
     assert h.calendar.created == []
 
 
+def test_completion_audit_failure_reports_instead_of_raising() -> None:
+    """The side effect already happened; raising would invite a duplicate retry."""
+    h = make(auto=frozenset({"calendar.create_event"}))
+    h.audit.fail_on = {S.ACTION_EXECUTED}
+    result = h.submit("calendar.create_event", DRAFT)
+    assert result.outcome is Outcome.EXECUTED
+    assert result.reason == "completion audit failed"
+    assert len(h.calendar.created) == 1
+
+
+def test_provider_error_text_is_redacted_for_audit_and_planner() -> None:
+    h = make()
+    h.calendar.outage = f"401 from upstream: access_token={SECRET} Authorization: Basic {SECRET}"
+    result = h.submit("calendar.list_events", WINDOW)
+    assert result.outcome is Outcome.FAILED
+    assert result.result is not None
+    for text in (result.reason, result.result.error, str([e.reason for e in h.audit.events])):
+        assert text is not None
+        assert SECRET not in text
+
+
+def test_rejected_extra_key_names_are_not_logged() -> None:
+    h = make()
+    result = h.submit("calendar.list_events", WINDOW | {SECRET: 1})
+    assert result.outcome is Outcome.DENIED
+    assert result.reason == "invalid params: <extra>: extra_forbidden"
+    assert SECRET not in str([e.model_dump() for e in h.audit.events])
+
+
+def test_malformed_pending_id_is_denied_without_echo() -> None:
+    h = make()
+    result = h.executor.execute_approved("A" * 10_000)
+    assert result.outcome is Outcome.DENIED
+    assert result.reason == "malformed pending id"
+    assert h.audit.events[-1].pending_id is None
+
+
 def test_audit_masks_attendee_emails() -> None:
     h = make()
     h.submit("calendar.create_event", INVITE)

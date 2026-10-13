@@ -6,6 +6,7 @@ approve a pending action and no access to tool instances.
 """
 
 import hmac
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -14,7 +15,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
-from personal_ai_assistant.audit import AuditEvent, AuditEventType, AuditSink
+from personal_ai_assistant.audit import AuditEvent, AuditEventType, AuditSink, redact_text
 from personal_ai_assistant.clock import Clock, system_clock
 from personal_ai_assistant.domain.result import ToolResult
 from personal_ai_assistant.domain.risk import RiskLevel
@@ -27,6 +28,9 @@ from personal_ai_assistant.safety.confirmation import (
 )
 from personal_ai_assistant.safety.gate import Policy, Verdict, decide, effective_risk
 from personal_ai_assistant.tools.base import PlannedAction, Tool, ToolSpec
+
+_PENDING_ID = re.compile(r"[0-9a-f]{32}")
+_FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 
 
 class Outcome(StrEnum):
@@ -127,6 +131,8 @@ class ActionExecutor:
 
     def execute_approved(self, pending_id: str) -> ExecutionResult:
         """Run a human-approved pending action exactly once, re-verifying everything."""
+        if not _PENDING_ID.fullmatch(pending_id):
+            return self._deny(uuid4().hex, None, None, "malformed pending id")
         try:
             pending = self._confirmations.consume(pending_id)
         except ConfirmationError as exc:
@@ -193,18 +199,30 @@ class ActionExecutor:
             result = ToolResult[Any].failed(f"tool raised {type(exc).__name__}")
         if not isinstance(result, ToolResult):
             result = ToolResult[Any].failed(f"tool returned {type(result).__name__}")
+        if result.error is not None:
+            # Provider error text goes to the audit log and back to the planner (an
+            # external LLM later); strip credentials from it either way.
+            result = result.model_copy(update={"error": redact_text(result.error)})
         outcome = Outcome.EXECUTED if result.succeeded else Outcome.FAILED
-        self._record(
-            AuditEventType.ACTION_EXECUTED if result.succeeded else AuditEventType.ACTION_FAILED,
-            action_id,
-            name,
-            risk,
-            None,
-            pending_id=pending_id,
-            digest=digest,
-            reason=result.error,
-        )
-        return ExecutionResult(action_id, outcome, name, risk, result=result, reason=result.error)
+        reason = result.error
+        try:
+            self._record(
+                AuditEventType.ACTION_EXECUTED
+                if result.succeeded
+                else AuditEventType.ACTION_FAILED,
+                action_id,
+                name,
+                risk,
+                None,
+                pending_id=pending_id,
+                digest=digest,
+                reason=reason,
+            )
+        except Exception:
+            # The side effect already happened: never raise here, or a caller
+            # could not tell and might retry it. Report the gap instead.
+            reason = f"{reason}; completion audit failed" if reason else "completion audit failed"
+        return ExecutionResult(action_id, outcome, name, risk, result=result, reason=reason)
 
     def _deny(
         self,
@@ -255,8 +273,18 @@ class ActionExecutor:
 
 
 def _summary(exc: ValidationError) -> str:
-    """Error locations and types only; input values never reach the audit log."""
+    """Error locations and types only; no input values or untrusted key names."""
+
+    def loc(err: Any) -> str:
+        parts = [
+            str(p) if isinstance(p, int) or _FIELD_NAME.fullmatch(str(p)) else "<key>"
+            for p in err["loc"]
+        ]
+        if err["type"] == "extra_forbidden" and parts:
+            parts[-1] = "<extra>"  # the key itself is planner-supplied
+        return ".".join(parts) or "<root>"
+
     return "; ".join(
-        f"{'.'.join(str(p) for p in err['loc']) or '<root>'}: {err['type']}"
+        f"{loc(err)}: {err['type']}"
         for err in exc.errors(include_url=False, include_input=False, include_context=False)
     )

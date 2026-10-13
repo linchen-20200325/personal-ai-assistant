@@ -12,11 +12,17 @@
 | 模組 | 職責 |
 |---|---|
 | `domain/risk.py` | `RiskLevel` 全序：READ < DRAFT < WRITE_LOW < WRITE_HIGH |
-| `domain/result.py` | `ToolResult` / `DataStatus` / `Provenance`：OK、PARTIAL、UNAVAILABLE、ERROR 的一致性由 validator 強制 |
-| `domain/calendar.py` | Calendar 資料模型；datetime 必須帶時區 |
+| `domain/result.py` | `ToolResult` / `DataStatus` / `Provenance`：OK、PARTIAL、UNAVAILABLE、ERROR 的一致性由 validator 強制；`Page[T]` 以必填的 `has_more` 標示清單是否完整 |
+| `domain/types.py` | 共用值型別：`Instant`（帶時區 ISO-8601）、`TimeRange`、`EmailAddress`、`Identifier`、`SearchText`、`SearchLimit` |
+| `domain/calendar.py` | Calendar 資料模型 |
+| `domain/email.py`、`document.py`、`note.py`、`reminder.py` | Email / 文件 / 筆記 / 提醒資料模型 |
 | `tools/base.py` | `ToolSpec`（名稱、描述、宣告風險、輸入 schema）、`Tool`、`PlannedAction` |
 | `tools/calendar.py` | `calendar.list_events`（READ）、`calendar.create_event`（WRITE_LOW，有 attendees 時升為 WRITE_HIGH） |
-| `providers/calendar.py` | `CalendarProvider` Protocol：可替換的資料存取邊界 |
+| `tools/email.py` | `email.search`、`email.get`（READ）、`email.create_draft`（DRAFT，不寄送；目前沒有寄信 tool） |
+| `tools/document.py` | `documents.search`、`documents.read`（READ） |
+| `tools/note.py` | `notes.search`（READ）、`notes.create`（WRITE_LOW） |
+| `tools/reminder.py` | `reminders.list`（READ）、`reminders.create`（WRITE_LOW；執行時再檢查到期時間仍在未來） |
+| `providers/*.py` | `CalendarProvider`、`EmailProvider`、`DocumentProvider`、`NoteProvider`、`ReminderProvider` Protocol：可替換的資料存取邊界 |
 | `safety/gate.py` | `Policy` 與純函式 `decide()` |
 | `safety/confirmation.py` | `PendingAction`、digest、`ConfirmationStore` |
 | `safety/executor.py` | `ActionExecutor`：唯一執行入口 |
@@ -46,6 +52,13 @@
 3. 重新驗證：tool 仍註冊、存放的參數仍合法、digest 重算相符、風險未上升、policy 仍允許寫入。任何一項失敗 → DENY。
 4. 執行並 audit。
 
+### 資料完整性（DATA ≠ AI ANALYSIS）
+
+- 單筆資料：provider 未提供的欄位為 `None`（unknown），所有 provider 回報欄位皆無預設值。
+- 清單：有上限的搜尋回傳 `Page[T]`，`has_more` 必填（`None` = 無法判斷），避免「前 20 封」被當成「全部」。
+- 文件內容：`DocumentContent.truncated` 必填，避免把截斷的文字當成完整文件摘要。
+- 查無或無法解析：回傳 `UNAVAILABLE`，不回傳空字串或空清單。
+
 ### 執行結果
 
 `Outcome.EXECUTED` 只在 `ToolResult` 為 OK / PARTIAL 時出現；provider 失敗、tool 拋例外、或 tool 回傳非 `ToolResult`（例如裸 `[]`）都是 `FAILED`，`data` 為 `None`。
@@ -61,7 +74,7 @@
 
 | Batch | 內容 |
 |---|---|
-| B2 | Email / Document / Notes / Reminder 介面 + fake；`docs/integrations.md` |
+| B2 ✅ | Email / Document / Notes / Reminder 介面 + fake；`docs/integrations.md` |
 | B3 | Orchestrator：Planner Protocol、LLM adapter（供應商待裁示）、CLI 確認通道 |
 | B4 | Google 唯讀 adapters（GCP / OAuth / token 存放待裁示） |
 | V2+ | 寫入 adapters、持久化 pending store、audit hash chain、taint escalation、受控 booking（見 security.md） |

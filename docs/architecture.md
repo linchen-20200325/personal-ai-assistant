@@ -28,7 +28,7 @@
 ### `ActionExecutor.submit(PlannedAction)`
 
 1. 依名稱解析 tool；未註冊 → **DENY**。
-2. 以 tool 的輸入 model 驗證參數；多餘欄位、naive datetime、型別錯誤 → **DENY**（audit 只記錯誤位置與類型，不記輸入值）。
+2. 以 tool 的輸入 model 驗證參數；多餘欄位、naive datetime、數字 timestamp、型別錯誤 → **DENY**（audit 只記錯誤位置與類型，不記輸入值或 planner 提供的 key 名稱）。
 3. 有效風險 `r = max(spec.base_risk, tool.assess_risk(params))`；評估拋例外或回傳非 `RiskLevel` → **DENY**。
 4. `decide(r, tool, policy)`：
    - 寫入類且 `writes_enabled=false` → DENY
@@ -40,8 +40,8 @@
 
 ### 人工確認 → `ActionExecutor.execute_approved(pending_id)`
 
-1. 人類通道（未來的 CLI/UI）以 `ConfirmationStore.approve(pending_id, digest=<所顯示的 digest>, approver=...)` 批准；
-   `ActionExecutor` 本身沒有任何 approve 能力。
+1. 人類通道（未來的 CLI/UI）依 `params_json` 顯示內容，並以 `ConfirmationStore.approve(pending_id, digest=..., approver=...)` 批准；
+   `ActionExecutor` 本身沒有任何 approve 能力。格式不符的 `pending_id` 直接 DENY。
 2. `consume()` 原子地將狀態 APPROVED → CONSUMED（single-use），並檢查 TTL。
 3. 重新驗證：tool 仍註冊、存放的參數仍合法、digest 重算相符、風險未上升、policy 仍允許寫入。任何一項失敗 → DENY。
 4. 執行並 audit。
@@ -52,7 +52,7 @@
 
 ## 數學與正確性備註
 
-- **風險單調性**：有效風險 `r_eff = max(r_base, r_dyn)`，因此 `r_eff ≥ r_base` 恆成立；計畫風險為各動作 `r_eff` 的最大值。
+- **風險單調性**：有效風險 `r_eff = max(r_base, r_dyn)`，因此 `r_eff ≥ r_base` 恆成立。（B3 引入多步驟計畫後，計畫風險定義為各動作 `r_eff` 的最大值。）
 - **Digest**：`SHA256(tool + "\n" + canonical_json(params))`，其中 `canonical_json` 為排序鍵、無空白、`allow_nan=False`。
   tool 名稱格式禁止換行，故編碼無歧義。碰撞機率依生日界 `P ≈ n² / 2^257`，`n = 10^6` 時約 `4.3 × 10^-66`。
 - **TTL**：`expires_at = created_at + ttl`；`now ≥ expires_at` 視為過期（邊界含等號）。
@@ -66,4 +66,5 @@
 | B4 | Google 唯讀 adapters（GCP / OAuth / token 存放待裁示） |
 | V2+ | 寫入 adapters、持久化 pending store、audit hash chain、taint escalation、受控 booking（見 security.md） |
 
-`ConfirmationStore` 目前為 in-memory：重啟後所有 pending 失效（fail closed）。
+`ConfirmationStore` 目前為 in-memory：重啟後所有 pending 失效（fail closed）；過期記錄於建立新 pending 時清除。
+`config.load_settings()` 目前只有測試在使用，B3 的 CLI 會是第一個實際使用它的地方。

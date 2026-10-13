@@ -17,6 +17,7 @@ ALLOWED_VENDORS = {
         "google_auth_httplib2",
         "httplib2",
         "keyring",
+        "requests",
     },
     "google_calendar.py": {"google", "googleapiclient", "httplib2"},
 }

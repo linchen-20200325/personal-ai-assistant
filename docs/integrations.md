@@ -24,7 +24,7 @@
 ## Google Calendar 唯讀設定（B4）
 
 1. 安裝：`uv sync --extra google`（或 `pip install 'personal-ai-assistant[google]'`）。
-2. 準備 Desktop app OAuth client JSON，放在 **repo 外**（例如 `~/secrets/pai-oauth-client.json`，建議 `chmod 600`）。程式會拒絕位於任何 git repository 內的路徑。
+2. 準備 Desktop app OAuth client JSON，放在 **repo 外**（例如 `~/secrets/pai-oauth-client.json`），並執行 `chmod 600`。程式會拒絕位於任何 git repository 內、或可被其他使用者讀取的檔案。
 3. 授權（瀏覽器登入，只要求 `calendar.readonly`）：`uv run pai-google-auth login --client-secrets ~/secrets/pai-oauth-client.json`
 4. 啟用：`ASSISTANT_CALENDAR_PROVIDER=google`（可選 `ASSISTANT_GOOGLE_CALENDAR_ID`，預設 `primary`）。
 5. 檢查 / 移除：`pai-google-auth status`、`pai-google-auth logout`（完全撤銷請另到 Google 帳戶「第三方存取」移除）。

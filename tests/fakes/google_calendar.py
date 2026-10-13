@@ -69,13 +69,15 @@ class FakeCalendarHttp:
         page_size: int | None = None,
         outage: Outage | None = None,
         body: Any = None,
+        raw: bytes | None = None,
         calendar_id: str = "primary",
     ) -> None:
         self.items = list(items)
         self.time_zone = time_zone
         self.page_size = page_size
         self.outage = outage
-        self.body = body  # raw override of the response body
+        self.body = body  # override of the decoded response body
+        self.raw = raw  # override of the response bytes
         self.calendar_id = calendar_id
         self.requests: list[dict[str, Any]] = []
 
@@ -90,6 +92,10 @@ class FakeCalendarHttp:
         if self.outage is not None:
             status, payload = self.outage
             return self._respond(status, payload)
+        if self.raw is not None:
+            return httplib2.Response(
+                {"status": "200", "content-type": "application/json"}
+            ), self.raw
         if self.body is not None:
             return self._respond(200, self.body)
         if unquote(parsed.path) != f"/calendar/v3/calendars/{self.calendar_id}/events":

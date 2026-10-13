@@ -11,8 +11,11 @@
   fixed messages: no token material, file contents or library exception text.
 """
 
+import contextlib
 import json
-from collections.abc import Callable
+import os
+import stat
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -20,11 +23,11 @@ import google_auth_httplib2
 import httplib2
 import keyring
 import keyring.errors
+import requests
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from keyring.backend import KeyringBackend
-from keyring.backends import fail
 
 CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
 SCOPES = (CALENDAR_READONLY_SCOPE,)
@@ -32,6 +35,23 @@ KEYRING_SERVICE = "personal-ai-assistant"
 KEYRING_USERNAME = "google-calendar-readonly"
 DEFAULT_TIMEOUT_SECONDS = 30
 LOGIN_HINT = "run `pai-google-auth login --client-secrets <path outside the repo>`"
+TOKEN_URI = "https://oauth2.googleapis.com/token"  # noqa: S105 - endpoint, not a secret
+REVOKE_URI = "https://oauth2.googleapis.com/revoke"
+
+# Allow-list (not deny-list) of OS-backed keyrings, by "module.Class". Anything
+# else -- no backend, the null backend, plaintext ``keyrings.alt`` files, unknown
+# third-party backends -- is refused rather than trusted with a refresh token.
+SECURE_BACKENDS = frozenset(
+    {
+        "keyring.backends.SecretService.Keyring",
+        "keyring.backends.libsecret.Keyring",
+        "keyring.backends.kwallet.DBusKeyring",
+        "keyring.backends.kwallet.DBusKeyringKWallet4",
+        "keyring.backends.macOS.Keyring",
+        "keyring.backends.Windows.WinVaultKeyring",
+    }
+)
+_CHAINER = "keyring.backends.chainer.ChainerBackend"
 
 
 class GoogleAuthError(Exception):
@@ -50,40 +70,67 @@ class TokenStore(Protocol):
     def delete(self) -> None: ...
 
 
-class KeyringTokenStore:
-    """Authorized-user JSON in the OS keyring under a fixed service / username."""
+def _qualified(backend: object) -> str:
+    return f"{type(backend).__module__}.{type(backend).__qualname__}"
 
-    def __init__(self, backend: KeyringBackend | None = None) -> None:
+
+class KeyringTokenStore:
+    """Authorized-user JSON in a secure OS keyring under a fixed service / username."""
+
+    def __init__(
+        self,
+        backend: KeyringBackend | None = None,
+        *,
+        secure_backends: frozenset[str] = SECURE_BACKENDS,
+    ) -> None:
         self._explicit = backend
+        self._secure = secure_backends
 
     def _backend(self) -> KeyringBackend:
         backend = self._explicit or keyring.get_keyring()
-        if isinstance(backend, fail.Keyring) or type(backend).__module__.startswith("keyrings.alt"):
-            raise GoogleAuthUnavailable("no secure OS keyring is available")
-        return backend
+        candidates = [backend]
+        if _qualified(backend) == _CHAINER:
+            # A chainer reads from every backend it wraps (plaintext ones too);
+            # use exactly one secure backend instead.
+            candidates = list(getattr(backend, "backends", ()))
+        for candidate in candidates:
+            if _qualified(candidate) in self._secure:
+                return candidate
+        raise GoogleAuthUnavailable("no secure OS keyring is available")
 
     def load(self) -> str | None:
         backend = self._backend()
+        failed = False
         try:
-            return backend.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
-        except keyring.errors.KeyringError:
-            raise GoogleAuthUnavailable("OS keyring could not be read (locked?)") from None
+            value = backend.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        except Exception:  # KeyringError, D-Bus errors, ...
+            failed = True
+        if failed:
+            raise GoogleAuthUnavailable("OS keyring could not be read (locked?)")
+        return value
 
     def save(self, token_json: str) -> None:
         backend = self._backend()
+        failed = False
         try:
             backend.set_password(KEYRING_SERVICE, KEYRING_USERNAME, token_json)
-        except keyring.errors.KeyringError:
-            raise GoogleAuthError("OS keyring could not store the token") from None
+            failed = backend.get_password(KEYRING_SERVICE, KEYRING_USERNAME) != token_json
+        except Exception:
+            failed = True
+        if failed:
+            raise GoogleAuthError("OS keyring could not store the token")
 
     def delete(self) -> None:
         backend = self._backend()
+        failed = False
         try:
             backend.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
         except keyring.errors.PasswordDeleteError:
-            return  # nothing stored
-        except keyring.errors.KeyringError:
-            raise GoogleAuthError("OS keyring could not delete the token") from None
+            pass  # nothing stored
+        except Exception:
+            failed = True
+        if failed or backend.get_password(KEYRING_SERVICE, KEYRING_USERNAME) is not None:
+            raise GoogleAuthError("OS keyring could not delete the token")
 
 
 def _scope_set(value: object) -> frozenset[str] | None:
@@ -94,25 +141,38 @@ def _scope_set(value: object) -> frozenset[str] | None:
     return None
 
 
+def _parse_token(raw: str) -> Credentials | str:
+    """Credentials, or a safe refusal reason. Never raises (no exception context)."""
+    try:
+        info = json.loads(raw)
+    except ValueError:
+        return "stored Google token is unreadable"
+    if not isinstance(info, dict):
+        return "stored Google token is unreadable"
+    if _scope_set(info.get("scopes")) != frozenset(SCOPES):
+        return "stored Google token has unexpected scopes; refused"
+    if info.get("token_uri", TOKEN_URI) != TOKEN_URI:
+        return "stored Google token has an unexpected token endpoint; refused"
+    try:
+        credentials: Credentials = Credentials.from_authorized_user_info(info)  # type: ignore[no-untyped-call]
+    except Exception:
+        return "stored Google token is unreadable"
+    return credentials
+
+
 def load_credentials(store: TokenStore) -> Credentials:
-    """Stored calendar.readonly credentials, or ``GoogleAuthUnavailable``."""
+    """Stored calendar.readonly credentials, or ``GoogleAuthUnavailable``.
+
+    Raised errors carry no exception context: the parse failure of a token
+    (whose text holds the refresh token) is never attached to them.
+    """
     raw = store.load()
     if raw is None:
         raise GoogleAuthUnavailable(f"Google Calendar is not authorized; {LOGIN_HINT}")
-    try:
-        info = json.loads(raw)
-        if not isinstance(info, dict):
-            raise TypeError
-        if _scope_set(info.get("scopes")) != frozenset(SCOPES):
-            raise GoogleAuthUnavailable(
-                f"stored Google token has unexpected scopes; refused. {LOGIN_HINT}"
-            )
-        credentials: Credentials = Credentials.from_authorized_user_info(info)  # type: ignore[no-untyped-call]
-    except GoogleAuthUnavailable:
-        raise
-    except (ValueError, TypeError, KeyError):
-        raise GoogleAuthUnavailable(f"stored Google token is unreadable; {LOGIN_HINT}") from None
-    return credentials
+    parsed = _parse_token(raw)
+    if isinstance(parsed, str):
+        raise GoogleAuthUnavailable(f"{parsed}; {LOGIN_HINT}")
+    return parsed
 
 
 def build_calendar_service(
@@ -135,7 +195,12 @@ def calendar_service_factory(
 
 
 def inside_git_repository(path: Path) -> bool:
+    """A ``.git`` in any parent. Bare "dotfiles" repos (``--git-dir``) are not detectable."""
     return any((parent / ".git").exists() for parent in path.parents)
+
+
+def _readable_by_others(path: Path) -> bool:
+    return os.name == "posix" and bool(path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO))
 
 
 class Flow(Protocol):
@@ -150,6 +215,40 @@ def _installed_app_flow(client_secrets: str, scopes: list[str]) -> Flow:
     return flow
 
 
+def _revoke(token: object) -> None:
+    """Best effort: a token we will not keep should not stay valid at Google."""
+    if not isinstance(token, Mapping):
+        return
+    for key in ("refresh_token", "access_token"):
+        value = token.get(key)
+        if isinstance(value, str) and value:
+            with contextlib.suppress(Exception):  # offline: nothing more we can do
+                requests.post(REVOKE_URI, data={"token": value}, timeout=10)
+            return
+
+
+def _run_flow(flow_factory: FlowFactory, path: Path, open_browser: bool) -> Any:
+    """Returns credentials, or a safe failure reason (str). Never raises."""
+    try:
+        flow = flow_factory(str(path), list(SCOPES))
+    except Exception:
+        return "OAuth client file is not a valid Desktop app client"
+    try:
+        return flow.run_local_server(
+            host="localhost",
+            port=0,
+            open_browser=open_browser,
+            authorization_prompt_message="請在瀏覽器開啟以下網址並授權（唯讀行事曆）：\n{url}",
+            success_message="授權完成，可以關閉此分頁。",
+        )
+    except Warning as warning:
+        # oauthlib raises "Scope has changed" with the issued token attached.
+        _revoke(getattr(warning, "token", None))
+        return "Google granted a different scope set; token revoked and discarded"
+    except Exception:
+        return "Google sign-in did not complete"
+
+
 def login(
     client_secrets: Path,
     store: TokenStore,
@@ -159,30 +258,24 @@ def login(
 ) -> None:
     """Run the installed-app OAuth flow on a loopback port and keep the token in the keyring."""
     try:
-        path = client_secrets.expanduser().resolve(strict=True)
+        path: Path | None = client_secrets.expanduser().resolve(strict=True)
     except OSError:
-        raise GoogleAuthError("OAuth client file not found") from None
+        path = None
+    if path is None:
+        raise GoogleAuthError("OAuth client file not found")
     if not path.is_file():
         raise GoogleAuthError("OAuth client path is not a file")
     if inside_git_repository(path):
         raise GoogleAuthError("OAuth client file must be stored outside any git repository")
-    try:
-        flow = flow_factory(str(path), list(SCOPES))
-    except (ValueError, KeyError, OSError):
-        raise GoogleAuthError("OAuth client file is not a valid Desktop app client") from None
-    try:
-        credentials = flow.run_local_server(
-            host="localhost",
-            port=0,
-            open_browser=open_browser,
-            authorization_prompt_message="請在瀏覽器開啟以下網址並授權（唯讀行事曆）：\n{url}",
-            success_message="授權完成，可以關閉此分頁。",
-        )
-    except Exception:
-        raise GoogleAuthError("Google sign-in did not complete") from None
+    if _readable_by_others(path):
+        raise GoogleAuthError("OAuth client file is readable by other users; run chmod 600 on it")
+    credentials = _run_flow(flow_factory, path, open_browser)
+    if isinstance(credentials, str):
+        raise GoogleAuthError(credentials)
     granted = _scope_set(getattr(credentials, "granted_scopes", None) or credentials.scopes)
     if granted != frozenset(SCOPES):
-        raise GoogleAuthError("Google granted a different scope set; token discarded")
+        _revoke({"refresh_token": getattr(credentials, "refresh_token", None)})
+        raise GoogleAuthError("Google granted a different scope set; token revoked and discarded")
     if not getattr(credentials, "refresh_token", None):
         raise GoogleAuthError("Google returned no refresh token; token discarded")
     token = json.loads(credentials.to_json())
@@ -191,9 +284,9 @@ def login(
 
 
 def status(store: TokenStore) -> str:
-    """Human-readable authorization state; never includes token material."""
+    """Local authorization state (not checked with Google); never includes token material."""
     try:
         load_credentials(store)
     except GoogleAuthError as exc:
         return f"未授權：{exc}"
-    return "已授權（scope：calendar.readonly，token 存於 OS keyring）"
+    return "已授權（scope：calendar.readonly，token 存於 OS keyring；撤銷與否需實際查詢才知道）"

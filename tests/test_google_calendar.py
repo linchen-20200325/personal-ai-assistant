@@ -468,3 +468,40 @@ def test_cli_google_calendar_without_keyring_reports_unavailable(
     )
     assert code == EXIT_INCOMPLETE
     assert "no secure OS keyring" in "\n".join(console.lines)
+
+
+def test_ongoing_event_without_end_is_kept() -> None:
+    started_yesterday = ev("long", start={"dateTime": "2026-10-13T20:00:00+08:00"}, end=None)
+    result = provider(FakeCalendarHttp(body={"items": [started_yesterday]})).list_events(DAY)
+    assert result.status is DataStatus.OK
+    assert [e.event_id for e in result.data or ()] == ["long"]
+
+
+def test_malformed_end_keeps_event_and_reports_gap() -> None:
+    raw = ev("odd", start={"dateTime": "2026-10-13T20:00:00+08:00"}, end={"dateTime": "bad"})
+    result = provider(FakeCalendarHttp(body={"items": [raw]})).list_events(DAY)
+    assert result.status is DataStatus.PARTIAL
+    assert [e.event_id for e in result.data or ()] == ["odd"]
+    assert result.missing == ("event[odd].end",)
+
+
+@pytest.mark.parametrize(
+    ("http", "message"),
+    [
+        (
+            FakeCalendarHttp(outage=__import__("http.client").client.IncompleteRead(b"")),
+            "unreachable",
+        ),
+        (
+            FakeCalendarHttp(outage=__import__("http.client").client.BadStatusLine("x")),
+            "unreachable",
+        ),
+        (FakeCalendarHttp(raw=b"\xff\xfe not utf8"), "unexpected Google Calendar response"),
+        (FakeCalendarHttp(raw=b"<html>proxy error</html>"), "unexpected Google Calendar response"),
+        (FakeCalendarHttp(outage=LookupError("weird")), "request failed"),
+    ],
+)
+def test_unusual_transport_failures_stay_semantic(http: FakeCalendarHttp, message: str) -> None:
+    result = provider(http).list_events(DAY)
+    assert result.status is DataStatus.ERROR
+    assert message in (result.error or "")

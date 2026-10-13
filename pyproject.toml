@@ -71,6 +71,7 @@ allowed-confusables = ["（", "）", "，", "：", "；", "？", "！"]
 "google_auth_httplib2".msg = "Google libraries belong in adapters/google_*.py only."
 "httplib2".msg = "Google libraries belong in adapters/google_*.py only."
 "keyring".msg = "Secret storage belongs in adapters/google_auth.py only."
+"requests".msg = "HTTP clients belong in adapters only."
 
 [tool.mypy]
 strict = true

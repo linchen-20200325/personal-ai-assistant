@@ -17,6 +17,7 @@ interprets or summarises events, and nothing is invented:
 ``create_event`` always refuses: this adapter has read-only scope by design.
 """
 
+import http.client
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -159,7 +160,9 @@ def map_event(
 
 def _overlaps(event: CalendarEvent, window: TimeRange) -> bool:
     if event.end is None:
-        return window.start <= event.start < window.end
+        # Unknown end: Google's own timeMin/timeMax filter already judged the
+        # overlap, so an event that started earlier may still be running.
+        return event.start < window.end
     return event.start < window.end and event.end > window.start
 
 
@@ -285,8 +288,12 @@ class GoogleCalendarProvider:
                 f"Google authorization expired or was revoked; {LOGIN_HINT}",
                 DataStatus.UNAVAILABLE,
             ) from None
-        except (TransportError, httplib2.HttpLib2Error, OSError):
+        except (TransportError, httplib2.HttpLib2Error, http.client.HTTPException, OSError):
             raise _Failure("Google Calendar is unreachable", DataStatus.ERROR) from None
+        except ValueError:  # undecodable / non-JSON body
+            raise _Failure("unexpected Google Calendar response", DataStatus.ERROR) from None
+        except Exception:
+            raise _Failure("Google Calendar request failed", DataStatus.ERROR) from None
         if not isinstance(body, Mapping):
             raise _Failure("unexpected Google Calendar response", DataStatus.ERROR)
         return body

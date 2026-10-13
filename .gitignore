@@ -32,3 +32,7 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# OAuth client files (must live outside the repo; belt and braces)
+*oauth*client*.json
+client*.json

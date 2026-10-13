@@ -197,3 +197,52 @@ def test_request_text_and_planner_text_never_audited() -> None:
     assert "which day?" not in dumped
     created = env.audit.events[0]
     assert created.params == {"tools": ["calendar.list_events"], "questions": 1}
+
+
+def test_pending_audit_failure_discards_pending_and_keeps_going() -> None:
+    env = Env(plan(("calendar.create_event", DRAFT), ("calendar.list_events", WINDOW)))
+    env.audit.fail_on = {S.ACTION_PENDING}
+    _, results = env.run()
+    assert [r.outcome for r in results] == [Outcome.FAILED, Outcome.EXECUTED]
+    assert "not queued" in (results[0].reason or "")
+    # Nothing approvable was left behind.
+    assert env.confirmations._records == {}
+
+
+def test_deny_audit_failure_is_reported_not_raised() -> None:
+    env = Env(plan(("calendar.create_event", DRAFT)), policy=Policy())
+    env.audit.fail_on = {S.ACTION_DENIED}
+    _, (result,) = env.run()
+    assert result.outcome is Outcome.DENIED
+    assert result.reason == "WRITE_LOW actions are disabled by policy; audit unavailable"
+
+
+def test_executor_crash_is_contained_per_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = Env(plan(("calendar.list_events", WINDOW), ("calendar.list_events", WINDOW)))
+    calls = []
+    original = env.executor.submit
+
+    def flaky(action: Any, *, plan_id: str | None = None) -> Any:
+        calls.append(action)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return original(action, plan_id=plan_id)
+
+    monkeypatch.setattr(env.executor, "submit", flaky)
+    _, results = env.run()
+    assert [r.outcome for r in results] == [Outcome.FAILED, Outcome.EXECUTED]
+    assert results[0].reason == "executor raised RuntimeError"
+
+
+def test_clock_failure_is_audited_as_plan_failure() -> None:
+    env = Env(plan())
+
+    def broken() -> datetime:
+        raise OSError("clock")
+
+    env.orchestrator = Orchestrator(
+        env.planner, env.executor, audit=env.audit, clock=env.clock, local_time=broken
+    )
+    proposal, _ = env.run()
+    assert proposal.error == "planner raised OSError"
+    assert env.audit.types() == [S.PLAN_FAILED]

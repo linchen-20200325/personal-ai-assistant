@@ -117,6 +117,11 @@ class ConfirmationStore:
             self._record_event(AuditEventType.CONFIRMATION_REJECTED, record.pending, approver)
             self._records[pending_id] = replace(record, status=PendingStatus.REJECTED)
 
+    def discard(self, pending_id: str) -> None:
+        """Forget a pending action that could not be audited (it was never shown)."""
+        with self._lock:
+            self._records.pop(pending_id, None)
+
     def consume(self, pending_id: str) -> PendingAction:
         """Atomically mark an approved, unexpired action as used and return it."""
         with self._lock:

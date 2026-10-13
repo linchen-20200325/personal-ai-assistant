@@ -110,7 +110,7 @@ def test_yes_approves_exact_params_and_executes_once() -> None:
     ]
     approved = env.audit.events[2]
     assert approved.actor == "cli:tester"
-    assert "title: Dentist" in env.console.text
+    assert 'title: "Dentist"' in env.console.text
 
 
 @pytest.mark.parametrize("answer", ["y", "YES ", "Yes", "ok", "", None])
@@ -155,7 +155,7 @@ def test_confirmation_escapes_bidi_and_control_characters() -> None:
     assert "\u202e" not in text
     assert "\u200b" not in text
     assert "\x1b" not in text
-    assert "title: Pay\\u202egnp.exe\\u200b" in text
+    assert 'title: "Pay\\u202egnp.exe\\u200b"' in text
 
 
 def test_expired_pending_is_not_executed() -> None:
@@ -249,3 +249,30 @@ def test_main_prompts_when_no_argument(tmp_path: Path) -> None:
     console = FakeConsole(None)
     assert main([], env=base_env(tmp_path), console=console, planner=ScriptedPlanner()) == EXIT_OK
     assert console.prompts == ["你想做什麼？ "]
+
+
+def test_main_rejects_invalid_auto_write_low(tmp_path: Path) -> None:
+    console = FakeConsole()
+    env = base_env(tmp_path, ASSISTANT_AUTO_WRITE_LOW="calendar.list_events")
+    assert main(["hi"], env=env, console=console, planner=ScriptedPlanner()) == EXIT_CONFIG
+    assert "設定錯誤" in console.text
+
+
+def test_main_contains_unexpected_session_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(self: Session, text: str) -> int:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(Session, "handle", explode)
+    console = FakeConsole()
+    code = main(["hi"], env=base_env(tmp_path), console=console, planner=ScriptedPlanner())
+    assert code == EXIT_INCOMPLETE
+    assert "處理中斷：RuntimeError" in console.text
+
+
+def test_network_is_blocked_in_tests() -> None:
+    import socket
+
+    with pytest.raises(RuntimeError, match="network access is disabled"):
+        socket.create_connection(("api.anthropic.com", 443))

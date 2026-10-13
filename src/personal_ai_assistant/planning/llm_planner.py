@@ -15,6 +15,7 @@ checked against the tool's own input model by the orchestrator and again by
 """
 
 import json
+import math
 from datetime import datetime
 from typing import Any
 
@@ -139,9 +140,27 @@ def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):  # e.g. 1e400 overflows to inf
+        raise ValueError("non-finite number is not allowed")
+    return value
+
+
 def strict_json_loads(text: str) -> Any:
-    """``json.loads`` without NaN / Infinity and without silently merged duplicate keys."""
-    return json.loads(text, parse_constant=_reject_constant, object_pairs_hook=_no_duplicate_keys)
+    """``json.loads`` without non-finite numbers and without silently merged duplicate keys.
+
+    Raises ``ValueError`` for every rejection, including excessive nesting.
+    """
+    try:
+        return json.loads(
+            text,
+            parse_constant=_reject_constant,
+            parse_float=_finite_float,
+            object_pairs_hook=_no_duplicate_keys,
+        )
+    except RecursionError:
+        raise ValueError("JSON nested too deeply") from None
 
 
 def parse_plan(text: str) -> Plan:

@@ -24,7 +24,7 @@ from personal_ai_assistant.planning.contracts import (
     PlanningError,
     PlanningRequest,
 )
-from personal_ai_assistant.safety.executor import ActionExecutor, ExecutionResult
+from personal_ai_assistant.safety.executor import ActionExecutor, ExecutionResult, Outcome
 from personal_ai_assistant.tools.base import PlannedAction
 from personal_ai_assistant.validation import validation_summary
 
@@ -63,9 +63,9 @@ class Orchestrator:
             return self._fail(
                 plan_id, AuditEventType.PLAN_REJECTED, f"request longer than {MAX_REQUEST_CHARS}"
             )
-        specs = self._executor.specs()
-        now: datetime = self._local_time()
         try:
+            specs = self._executor.specs()
+            now: datetime = self._local_time()
             plan = self._planner.plan(PlanningRequest(text=text, tools=specs, now=now))
         except InvalidPlanError as exc:
             return self._fail(plan_id, AuditEventType.PLAN_REJECTED, str(exc))
@@ -112,12 +112,23 @@ class Orchestrator:
         """Submit every proposed action to the executor (which gates each one)."""
         if proposal.plan is None:
             return ()
-        return tuple(
-            self._executor.submit(
-                PlannedAction(tool=action.tool, params=action.params), plan_id=proposal.plan_id
-            )
-            for action in proposal.plan.actions
-        )
+        results: list[ExecutionResult] = []
+        for action in proposal.plan.actions:
+            try:
+                result = self._executor.submit(
+                    PlannedAction(tool=action.tool, params=action.params),
+                    plan_id=proposal.plan_id,
+                )
+            except Exception as exc:
+                # Keep reporting what already ran; never let one action hide the others.
+                result = ExecutionResult(
+                    uuid4().hex,
+                    Outcome.FAILED,
+                    action.tool,
+                    reason=f"executor raised {type(exc).__name__}",
+                )
+            results.append(result)
+        return tuple(results)
 
     def _fail(self, plan_id: str, kind: AuditEventType, reason: str) -> Proposal:
         try:

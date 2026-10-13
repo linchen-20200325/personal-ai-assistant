@@ -5,15 +5,15 @@ ruff ``banned-api`` and an architecture test). It maps a ``StructuredRequest``
 to one Messages API call with a JSON-schema output format and returns the raw
 JSON text; validation happens in ``planning.llm_planner``. Every SDK failure is
 translated to ``ModelUnavailableError`` with a fixed, credential-free message,
-and exception chaining is suppressed so SDK objects (requests, headers) never
-reach callers, logs or the audit trail.
+raised outside the handler so neither ``__cause__`` nor ``__context__`` keeps
+SDK objects (requests, auth headers) reachable from callers, logs or audit.
 """
 
 from collections.abc import Mapping
 from typing import Literal, Self
 
 import anthropic
-from anthropic.types import TextBlock
+from anthropic.types import Message, TextBlock
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from personal_ai_assistant.planning.contracts import (
@@ -94,8 +94,27 @@ class AnthropicStructuredModel:
         return f"AnthropicStructuredModel(model={self._model!r})"
 
     def generate(self, request: StructuredRequest) -> str:
+        outcome = self._call(request)
+        if isinstance(outcome, str):
+            # Raised outside the ``except`` block on purpose: the SDK exception
+            # (which references the HTTP request and its auth header) must not
+            # survive as ``__context__``.
+            raise ModelUnavailableError(outcome)
+        response = outcome
+        if response.stop_reason == "refusal":
+            raise ModelUnavailableError("model declined the request")
+        if response.stop_reason != "end_turn":
+            # max_tokens / context exhaustion etc.: the JSON may be cut off.
+            raise ModelUnavailableError(f"model stopped early ({response.stop_reason})")
+        texts = [block.text for block in response.content if isinstance(block, TextBlock)]
+        if len(texts) != 1:
+            raise ModelUnavailableError("model returned no single structured answer")
+        return texts[0]
+
+    def _call(self, request: StructuredRequest) -> Message | str:
+        """The API response, or a fixed credential-free failure message."""
         try:
-            response = self._client.messages.create(
+            return self._client.messages.create(
                 model=self._model,
                 max_tokens=self._max_tokens,
                 system=request.system,
@@ -106,24 +125,14 @@ class AnthropicStructuredModel:
                 },
             )
         except anthropic.APITimeoutError:
-            raise ModelUnavailableError("model request timed out") from None
+            return "model request timed out"
         except anthropic.APIConnectionError:
-            raise ModelUnavailableError("model service unreachable") from None
+            return "model service unreachable"
         except anthropic.AuthenticationError:
-            raise ModelUnavailableError("model service rejected the credentials") from None
+            return "model service rejected the credentials"
         except anthropic.RateLimitError:
-            raise ModelUnavailableError("model service rate limit reached") from None
+            return "model service rate limit reached"
         except anthropic.APIStatusError as exc:
-            raise ModelUnavailableError(f"model service error (HTTP {exc.status_code})") from None
+            return f"model service error (HTTP {exc.status_code})"
         except anthropic.AnthropicError:
-            raise ModelUnavailableError("model service error") from None
-
-        if response.stop_reason == "refusal":
-            raise ModelUnavailableError("model declined the request")
-        if response.stop_reason != "end_turn":
-            # max_tokens / context exhaustion etc.: the JSON may be cut off.
-            raise ModelUnavailableError(f"model stopped early ({response.stop_reason})")
-        texts = [block.text for block in response.content if isinstance(block, TextBlock)]
-        if len(texts) != 1:
-            raise ModelUnavailableError("model returned no single structured answer")
-        return texts[0]
+            return "model service error"

@@ -77,11 +77,24 @@ class TerminalConsole:
         print(line)
 
     def ask(self, prompt: str) -> str | None:
+        _discard_typeahead()
         try:
             return input(prompt)
         except (EOFError, KeyboardInterrupt):
             print()
             return None
+
+
+def _discard_typeahead() -> None:
+    """Drop keystrokes typed before the prompt appeared (e.g. 'yes' typed while planning)."""
+    if not sys.stdin.isatty():
+        return
+    try:
+        import termios
+
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except (ImportError, OSError):  # non-POSIX terminal: nothing to flush
+        pass
 
 
 def build_tools(provider: UnconfiguredProvider, *, clock: Clock = system_clock) -> list[Tool[Any]]:
@@ -286,13 +299,17 @@ def main(
 
     audit = JsonlAuditSink(settings.audit_log_path)
     confirmations = ConfirmationStore(audit=audit, clock=clock)
-    executor = ActionExecutor(
-        build_tools(UnconfiguredProvider(), clock=clock),
-        policy=settings.policy,
-        confirmations=confirmations,
-        audit=audit,
-        clock=clock,
-    )
+    try:
+        executor = ActionExecutor(
+            build_tools(UnconfiguredProvider(), clock=clock),
+            policy=settings.policy,
+            confirmations=confirmations,
+            audit=audit,
+            clock=clock,
+        )
+    except ValueError as exc:  # e.g. ASSISTANT_AUTO_WRITE_LOW names a non-WRITE_LOW tool
+        console.show(f"設定錯誤：{escape_display(str(exc))}")
+        return EXIT_CONFIG
     orchestrator = Orchestrator(
         planner,
         executor,
@@ -307,7 +324,12 @@ def main(
         console=console,
         approver=_approver_identity(),
     )
-    return session.handle(text)
+    try:
+        return session.handle(text)
+    except Exception as exc:
+        # Results already shown stay valid; no pending action is approved by this path.
+        console.show(f"處理中斷：{escape_display(type(exc).__name__)}；請查看 audit log 後再重試。")
+        return EXIT_INCOMPLETE
 
 
 if __name__ == "__main__":  # pragma: no cover

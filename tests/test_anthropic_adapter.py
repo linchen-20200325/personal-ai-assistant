@@ -139,8 +139,9 @@ def test_sdk_errors_become_neutral_errors_without_secrets(
     with pytest.raises(ModelUnavailableError, match=match) as info:
         model.generate(REQUEST)
     assert KEY not in str(info.value)
+    # Neither chain link may keep the SDK exception (and its request headers) alive.
     assert info.value.__cause__ is None
-    assert info.value.__suppress_context__
+    assert info.value.__context__ is None
     assert not isinstance(info.value, anthropic.AnthropicError)
 
 

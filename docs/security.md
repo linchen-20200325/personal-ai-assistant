@@ -34,9 +34,9 @@
 | 10 | Planner 無法繞過 executor | `PlannedAction` 只有 `tool`、`params`；executor 公開介面僅 `specs/submit/execute_approved`；tool 實例為私有；AST 架構測試確保只有 executor 呼叫 `.run()` | `test_executor.py` |
 | 11 | LLM 輸出一律本地驗證、不猜測 | 嚴格 JSON（拒 NaN/Infinity、重複 key）、封閉 schema（`extra="forbid"`）、缺欄位不補預設、型別不轉換、大小上限；任一動作無效 → 整份計畫拒絕 | `test_llm_planner.py`、`test_orchestrator.py` |
 | 12 | LLM 無法提升權限 | `Plan` 無 risk/approval 欄位；風險由 tool 決定；WRITE_HIGH（例如含 attendees 的行程）即使在 `auto_write_low` 白名單仍需確認 | `test_orchestrator.py` |
-| 13 | 只有人類能核准 | `ConfirmationStore.approve` 只在 `cli.py` 呼叫（AST 測試）；需互動式 TTY 且輸入 `yes`；確認畫面由 `params_json` 產生並 escape bidi / 零寬 / 控制字元 | `test_cli.py`、`test_architecture.py`、`test_display.py` |
-| 14 | Vendor SDK 隔離 | `anthropic` 只能在 `adapters/anthropic_model.py` import（ruff + AST）；SDK 例外轉為固定訊息的 `ModelUnavailableError`，且 `from None` 切斷例外鏈 | `test_anthropic_adapter.py`、`test_architecture.py` |
-| 15 | API key 不外洩 | 只從 `ANTHROPIC_API_KEY` 環境變數讀入 `SecretStr`；設定錯誤訊息只列欄位名稱；audit 不記使用者文字與模型輸出 | `test_anthropic_adapter.py`、`test_cli.py`（寫檔後檢查） |
+| 13 | 只有人類能核准 | `ConfirmationStore.approve` 只在 `cli.py` 呼叫（AST 測試）；需互動式 TTY 且輸入 `yes`（提示前清除預先輸入的按鍵）；確認畫面由 `params_json` 產生，字串值加引號，escape 控制 / bidi / 零寬 / combining / 空白外觀字元與連續空白 | `test_cli.py`、`test_architecture.py`、`test_display.py` |
+| 14 | Vendor SDK 隔離 | `anthropic` 只能在 `adapters/anthropic_model.py` import（ruff + AST）；SDK 例外轉為固定訊息的 `ModelUnavailableError`，且在 `except` 區塊外拋出，`__cause__` 與 `__context__` 皆為 `None`（SDK 例外帶有含 auth header 的 request） | `test_anthropic_adapter.py`、`test_architecture.py` |
+| 15 | API key 不外洩 | 只從 `ANTHROPIC_API_KEY` 環境變數讀入 `SecretStr`；設定錯誤訊息只列欄位名稱；audit 不記使用者請求文字、planner 說明與問題（動作參數仍依 #9 規則遮蔽後記錄，與非 LLM 來源相同） | `test_anthropic_adapter.py`、`test_cli.py`（寫檔後檢查） |
 
 另：
 - 執行前的 audit 寫入失敗時，side effect **不會**執行（fail closed）。
@@ -51,7 +51,8 @@
 - **DRAFT 不受 `writes_enabled` 限制**：依核准的風險模型，DRAFT 可自主執行，因此即使寫入關閉，仍可建立遠端草稿（不會寄出）。若日後希望草稿也需確認或有數量上限，屬產品規則調整。
 
 - **確認畫面（B3 CLI）**：必須由程式從 `PendingAction.params_json` 產生，不得使用 planner 撰寫的摘要；顯示時需 escape 控制字元與 bidi / 零寬字元（例如 U+202E、U+200B），避免標題被視覺偽裝。
-- **Pending 寫入 audit 的順序**：pending 記錄先建立、再寫 `action.pending`。若此 audit 失敗，會留下一筆尚未記錄的 pending；但它之後的批准（`confirmation.approved`）與執行（`action.started`）都必須先成功寫入 audit，所以任何實際執行仍有完整紀錄。
+- **Pending 寫入 audit 的順序**：pending 記錄先建立、再寫 `action.pending`。若此 audit 失敗，該 pending 會立即被丟棄（`ConfirmationStore.discard`），結果為 FAILED，不會留下可批准的紀錄。`action.denied` 的 audit 失敗不拋例外，而是在 reason 標示 `audit unavailable`（拒絕本身已是安全結果）。
+- **計畫執行順序**：一份計畫的所有動作先依序送入 executor，READ / DRAFT / 白名單 WRITE_LOW 會在任何確認提示之前執行；需要確認的動作之後逐一詢問。拒絕某個確認不會撤回其他已自動執行的動作（它們依政策本就不需確認）。
 - **架構測試範圍**：AST 測試只保證 `.run()` 由 executor 呼叫；provider 方法只應由 tool 呼叫，這一點目前靠 code review 維持。
 - **Provider adapter 契約**：錯誤字串不得包含憑證；executor 的遮蔽只是第二道防線。
 

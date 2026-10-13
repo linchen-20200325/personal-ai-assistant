@@ -195,3 +195,12 @@ def test_model_errors_propagate_and_non_text_is_rejected() -> None:
         LLMPlanner(ScriptedModel([ModelUnavailableError("down")])).plan(request())
     with pytest.raises(InvalidPlanError, match="non-text"):
         LLMPlanner(ScriptedModel([{"summary": "s"}])).plan(request())
+
+
+def test_overflowing_float_and_deep_nesting_are_rejected() -> None:
+    action = act()
+    action["arguments_json"] = '{"limit": 1e400}'
+    with pytest.raises(InvalidPlanError, match="not valid JSON"):
+        parse_plan(wire([action]))
+    with pytest.raises(InvalidPlanError, match="not valid JSON"):
+        parse_plan("[" * 30_000 + "]" * 30_000)

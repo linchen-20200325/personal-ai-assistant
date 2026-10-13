@@ -132,16 +132,27 @@ class ActionExecutor:
                 risk=risk,
                 ttl=self._policy.confirmation_ttl,
             )
-            self._record(
-                AuditEventType.ACTION_PENDING,
-                action_id,
-                action.tool,
-                risk,
-                params,
-                pending_id=pending.pending_id,
-                digest=pending.digest,
-                plan_id=plan_id,
-            )
+            try:
+                self._record(
+                    AuditEventType.ACTION_PENDING,
+                    action_id,
+                    action.tool,
+                    risk,
+                    params,
+                    pending_id=pending.pending_id,
+                    digest=pending.digest,
+                    plan_id=plan_id,
+                )
+            except Exception:
+                # An unrecorded pending action must not stay approvable.
+                self._confirmations.discard(pending.pending_id)
+                return ExecutionResult(
+                    action_id,
+                    Outcome.FAILED,
+                    action.tool,
+                    risk,
+                    reason="audit unavailable; not queued for confirmation",
+                )
             return ExecutionResult(
                 action_id, Outcome.PENDING_CONFIRMATION, action.tool, risk, pending=pending
             )
@@ -262,16 +273,20 @@ class ActionExecutor:
         pending_id: str | None = None,
         plan_id: str | None = None,
     ) -> ExecutionResult:
-        self._record(
-            AuditEventType.ACTION_DENIED,
-            action_id,
-            tool,
-            risk,
-            None,
-            pending_id=pending_id,
-            reason=reason,
-            plan_id=plan_id,
-        )
+        try:
+            self._record(
+                AuditEventType.ACTION_DENIED,
+                action_id,
+                tool,
+                risk,
+                None,
+                pending_id=pending_id,
+                reason=reason,
+                plan_id=plan_id,
+            )
+        except Exception:
+            # Denying is already the safe outcome; report the gap instead of raising.
+            reason = f"{reason}; audit unavailable"
         return ExecutionResult(action_id, Outcome.DENIED, tool, risk, reason=reason)
 
     def _record(

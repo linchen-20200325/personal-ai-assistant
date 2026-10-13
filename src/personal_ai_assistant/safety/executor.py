@@ -28,9 +28,9 @@ from personal_ai_assistant.safety.confirmation import (
 )
 from personal_ai_assistant.safety.gate import Policy, Verdict, decide, effective_risk
 from personal_ai_assistant.tools.base import PlannedAction, Tool, ToolSpec
+from personal_ai_assistant.validation import validation_summary as _summary
 
 _PENDING_ID = re.compile(r"[0-9a-f]{32}")
-_FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 
 
 class Outcome(StrEnum):
@@ -84,26 +84,45 @@ class ActionExecutor:
         """What a planner may propose. Specs are data; tools stay private."""
         return tuple(tool.spec for tool in self._tools.values())
 
-    def submit(self, action: PlannedAction) -> ExecutionResult:
+    def submit(self, action: PlannedAction, *, plan_id: str | None = None) -> ExecutionResult:
+        """Gate and (if allowed) run one proposed action.
+
+        ``plan_id`` only correlates audit events with the plan that proposed the
+        action; it grants nothing.
+        """
         action_id = uuid4().hex
         tool = self._tools.get(action.tool)
         if tool is None:
-            return self._deny(action_id, action.tool, None, "unknown tool")
+            return self._deny(action_id, action.tool, None, "unknown tool", plan_id=plan_id)
         try:
             params = tool.spec.input_model.model_validate(action.params)
         except ValidationError as exc:
-            return self._deny(action_id, action.tool, None, f"invalid params: {_summary(exc)}")
+            return self._deny(
+                action_id,
+                action.tool,
+                None,
+                f"invalid params: {_summary(exc)}",
+                plan_id=plan_id,
+            )
         try:
             risk = self._assess(tool, params)
         except Exception as exc:
             return self._deny(
-                action_id, action.tool, None, f"risk assessment failed: {type(exc).__name__}"
+                action_id,
+                action.tool,
+                None,
+                f"risk assessment failed: {type(exc).__name__}",
+                plan_id=plan_id,
             )
         params_json = canonical_json(params.model_dump(mode="json"))
         verdict = decide(risk, action.tool, self._policy)
         if verdict is Verdict.DENY:
             return self._deny(
-                action_id, action.tool, risk, f"{risk.name} actions are disabled by policy"
+                action_id,
+                action.tool,
+                risk,
+                f"{risk.name} actions are disabled by policy",
+                plan_id=plan_id,
             )
         if verdict is Verdict.CONFIRM:
             pending = self._confirmations.create(
@@ -121,12 +140,18 @@ class ActionExecutor:
                 params,
                 pending_id=pending.pending_id,
                 digest=pending.digest,
+                plan_id=plan_id,
             )
             return ExecutionResult(
                 action_id, Outcome.PENDING_CONFIRMATION, action.tool, risk, pending=pending
             )
         return self._run(
-            action_id, tool, params, risk, digest=action_digest(action.tool, params_json)
+            action_id,
+            tool,
+            params,
+            risk,
+            digest=action_digest(action.tool, params_json),
+            plan_id=plan_id,
         )
 
     def execute_approved(self, pending_id: str) -> ExecutionResult:
@@ -176,6 +201,7 @@ class ActionExecutor:
         risk: RiskLevel,
         digest: str,
         pending_id: str | None = None,
+        plan_id: str | None = None,
     ) -> ExecutionResult:
         name = tool.spec.name
         try:
@@ -187,6 +213,7 @@ class ActionExecutor:
                 params,
                 pending_id=pending_id,
                 digest=digest,
+                plan_id=plan_id,
             )
         except Exception:
             # No audit trail, no side effect.
@@ -217,6 +244,7 @@ class ActionExecutor:
                 pending_id=pending_id,
                 digest=digest,
                 reason=reason,
+                plan_id=plan_id,
             )
         except Exception:
             # The side effect already happened: never raise here, or a caller
@@ -232,6 +260,7 @@ class ActionExecutor:
         reason: str,
         *,
         pending_id: str | None = None,
+        plan_id: str | None = None,
     ) -> ExecutionResult:
         self._record(
             AuditEventType.ACTION_DENIED,
@@ -241,6 +270,7 @@ class ActionExecutor:
             None,
             pending_id=pending_id,
             reason=reason,
+            plan_id=plan_id,
         )
         return ExecutionResult(action_id, Outcome.DENIED, tool, risk, reason=reason)
 
@@ -255,6 +285,7 @@ class ActionExecutor:
         pending_id: str | None = None,
         digest: str | None = None,
         reason: str | None = None,
+        plan_id: str | None = None,
     ) -> None:
         self._audit.record(
             AuditEvent(
@@ -262,6 +293,7 @@ class ActionExecutor:
                 timestamp=self._clock(),
                 actor="executor",
                 action_id=action_id,
+                plan_id=plan_id,
                 pending_id=pending_id,
                 tool=tool,
                 risk=risk,
@@ -270,21 +302,3 @@ class ActionExecutor:
                 reason=reason,
             )
         )
-
-
-def _summary(exc: ValidationError) -> str:
-    """Error locations and types only; no input values or untrusted key names."""
-
-    def loc(err: Any) -> str:
-        parts = [
-            str(p) if isinstance(p, int) or _FIELD_NAME.fullmatch(str(p)) else "<key>"
-            for p in err["loc"]
-        ]
-        if err["type"] == "extra_forbidden" and parts:
-            parts[-1] = "<extra>"  # the key itself is planner-supplied
-        return ".".join(parts) or "<root>"
-
-    return "; ".join(
-        f"{loc(err)}: {err['type']}"
-        for err in exc.errors(include_url=False, include_input=False, include_context=False)
-    )

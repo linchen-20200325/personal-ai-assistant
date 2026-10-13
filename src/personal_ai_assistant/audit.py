@@ -79,6 +79,9 @@ class AuditEventType(StrEnum):
     ACTION_FAILED = "action.failed"
     CONFIRMATION_APPROVED = "confirmation.approved"
     CONFIRMATION_REJECTED = "confirmation.rejected"
+    PLAN_CREATED = "plan.created"
+    PLAN_REJECTED = "plan.rejected"
+    PLAN_FAILED = "plan.failed"
 
 
 class AuditEvent(BaseModel):
@@ -89,6 +92,7 @@ class AuditEvent(BaseModel):
     actor: str = Field(min_length=1)
     event_id: str = Field(default_factory=lambda: uuid4().hex)
     action_id: str | None = None
+    plan_id: str | None = None
     pending_id: str | None = None
     tool: str | None = None
     risk: RiskLevel | None = None

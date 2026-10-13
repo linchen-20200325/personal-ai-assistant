@@ -99,6 +99,18 @@ class TestNaiveDatetimeRejected:
             )
 
 
+class TestStrictInstants:
+    @pytest.mark.parametrize("value", [1_700_000_000, "1700000000", 1.7e9, 1_700_000_000_000])
+    def test_numeric_timestamps_are_rejected(self, value: object) -> None:
+        with pytest.raises(ValidationError):
+            TimeRange.model_validate({"start": value, "end": "2030-01-01T00:00:00+00:00"})
+
+    def test_sub_minute_offsets_are_rejected(self) -> None:
+        odd = timezone(timedelta(seconds=30))
+        with pytest.raises(ValidationError, match="whole number of minutes"):
+            TimeRange(start=datetime(2026, 1, 1, tzinfo=odd), end=datetime(2026, 1, 2, tzinfo=UTC))
+
+
 class TestCalendarModels:
     def test_time_range_requires_end_after_start(self) -> None:
         with pytest.raises(ValidationError):

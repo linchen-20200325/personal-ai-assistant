@@ -35,7 +35,13 @@ def _meta(doc_id: str, title: str, days_ago: int) -> DocumentMeta:
 
 TRIP = _meta("trip", "Tokyo trip plan", 1)
 BUDGET = _meta("budget", "Budget 2026", 3)
-SCAN = _meta("scan", "Scanned receipt", 2)
+SCAN = DocumentMeta(
+    doc_id="scan",
+    title=None,
+    mime_type=None,
+    modified_at=T0 - timedelta(days=2),
+    web_url=None,
+)
 DOCS: dict[DocumentMeta, str | None] = {
     TRIP: "Day 1: Asakusa. " * 100,
     BUDGET: "Rent, food, travel",
@@ -51,7 +57,7 @@ def factory(request: pytest.FixtureRequest) -> Factory:
 def test_search_most_recent_first_and_bounded(factory: Factory) -> None:
     result = factory(DOCS, None).search_documents(DocumentSearch(limit=2))
     assert result.data is not None
-    assert [d.doc_id for d in result.data.items] == ["trip", "scan"]
+    assert result.data.items == (TRIP, SCAN)  # metadata reported exactly, unknowns stay None
     assert result.data.has_more is True
 
 

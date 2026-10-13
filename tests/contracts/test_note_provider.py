@@ -53,9 +53,13 @@ def test_search_by_text_and_limit(factory: Factory) -> None:
 
 
 def test_untitled_note_keeps_title_unknown(factory: Factory) -> None:
-    created = factory(None).create_note(NoteDraft(body="x"))
+    provider = factory(None)
+    created = provider.create_note(NoteDraft(body="x"))
     assert created.data is not None
     assert created.data.title is None
+    found = provider.search_notes(NoteSearch())
+    assert found.data is not None
+    assert found.data.items == (created.data,)
 
 
 def test_outage_is_reported_not_disguised_as_empty(factory: Factory) -> None:

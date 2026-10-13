@@ -40,18 +40,36 @@ def _msg(message_id: str, hours_ago: float | None, subject: str = "synthetic") -
     )
 
 
+# Mostly-unknown fields on purpose: adapters must not fill them in.
+MID = EmailMessage(
+    message_id="mid",
+    thread_id=None,
+    subject=None,
+    sender=None,
+    recipients=None,
+    received_at=T0 - timedelta(hours=5),
+    snippet=None,
+    body_text="body of mid",
+    labels=None,
+    is_unread=None,
+)
+
+
 @pytest.fixture(params=PROVIDERS, ids=lambda f: f.__name__)
 def factory(request: pytest.FixtureRequest) -> Factory:
     return request.param  # type: ignore[no-any-return]
 
 
 def test_search_is_newest_first_and_bounded(factory: Factory) -> None:
-    provider = factory([_msg("old", 30), _msg("new", 1), _msg("mid", 5)], None)
+    provider = factory([_msg("old", 30), _msg("new", 1), MID], None)
     result = provider.search_messages(EmailSearch(limit=2))
     assert result.status is DataStatus.OK
     assert result.data is not None
     assert [m.message_id for m in result.data.items] == ["new", "mid"]
     assert result.data.has_more is True
+    # Search results may omit bodies, but every other field must be reported
+    # exactly as stored: unknown stays None, never "" / () / False.
+    assert result.data.items[1] == MID.model_copy(update={"body_text": None})
 
 
 def test_search_by_window_and_text(factory: Factory) -> None:
@@ -76,8 +94,7 @@ def test_no_match_is_a_verified_empty_page(factory: Factory) -> None:
 def test_get_returns_full_message_or_failure(factory: Factory) -> None:
     provider = factory([_msg("a", 1)], None)
     found = provider.get_message("a")
-    assert found.data is not None
-    assert found.data.body_text == "body of a"
+    assert found.data == _msg("a", 1)
     missing = provider.get_message("zzz")
     assert not missing.succeeded
     assert missing.data is None

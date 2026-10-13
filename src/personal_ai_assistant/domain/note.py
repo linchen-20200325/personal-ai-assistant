@@ -8,6 +8,7 @@ from personal_ai_assistant.domain.types import (
     Instant,
     SearchLimit,
     SearchText,
+    SingleLine,
 )
 
 
@@ -16,14 +17,14 @@ class Note(BaseModel):
 
     note_id: Identifier
     title: str | None
-    body: str
+    body: str | None  # None when the backend did not return the body
     created_at: Instant | None
 
 
 class NoteDraft(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
-    title: str | None = Field(default=None, min_length=1, max_length=200)
+    title: SingleLine | None = Field(default=None, min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=20_000)
 
 

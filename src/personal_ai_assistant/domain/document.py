@@ -1,6 +1,8 @@
 """Document domain models. Document content is untrusted external data."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, Strict
 
 from personal_ai_assistant.domain.types import (
     DEFAULT_SEARCH_LIMIT,
@@ -47,4 +49,4 @@ class ReadDocument(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     doc_id: Identifier
-    max_chars: int = Field(default=DEFAULT_MAX_CHARS, ge=1, le=200_000)
+    max_chars: Annotated[int, Strict()] = Field(default=DEFAULT_MAX_CHARS, ge=1, le=200_000)

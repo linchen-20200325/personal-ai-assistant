@@ -9,6 +9,7 @@ from personal_ai_assistant.domain.types import (
     Instant,
     SearchLimit,
     SearchText,
+    SingleLine,
     TimeRange,
 )
 
@@ -52,7 +53,7 @@ class EmailDraft(BaseModel):
 
     to: tuple[EmailAddress, ...] = Field(min_length=1, max_length=50)
     cc: tuple[EmailAddress, ...] = Field(default=(), max_length=50)
-    subject: str = Field(min_length=1, max_length=500)
+    subject: SingleLine = Field(min_length=1, max_length=500)
     body: str = Field(min_length=1, max_length=50_000)
 
 

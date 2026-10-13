@@ -9,7 +9,8 @@ from pydantic import ValidationError
 from personal_ai_assistant.audit import REDACTED, AuditEventType
 from personal_ai_assistant.domain.document import DocumentContent, ReadDocument
 from personal_ai_assistant.domain.email import EmailDraft, EmailMessage, EmailSearch
-from personal_ai_assistant.domain.reminder import ReminderDraft
+from personal_ai_assistant.domain.note import Note, NoteDraft
+from personal_ai_assistant.domain.reminder import Reminder, ReminderDraft
 from personal_ai_assistant.domain.result import DataStatus, Page
 from personal_ai_assistant.domain.risk import RiskLevel
 from personal_ai_assistant.safety.confirmation import ConfirmationStore
@@ -78,6 +79,43 @@ class TestValidation:
             DocumentContent.model_validate(
                 {"doc_id": "d", "title": None, "mime_type": None, "text": "t"}
             )
+
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "friend<attacker@evil.example>",
+            "x,second@evil.example",
+            "alice)@example.com",
+            '"quoted"@example.com',
+            "a@b",
+            "a@exa mple.com",
+            "a;b@example.com",
+        ],
+    )
+    def test_recipient_must_be_a_single_bare_address(self, address: str) -> None:
+        with pytest.raises(ValidationError):
+            EmailDraft(to=(address,), subject="s", body="b")
+
+    @pytest.mark.parametrize("value", ["Dinner\r\nBcc: spy@example.com", "a\x00b", "tab\there"])
+    def test_single_line_fields_reject_control_characters(self, value: str) -> None:
+        with pytest.raises(ValidationError):
+            EmailDraft(to=("a@example.com",), subject=value, body="b")
+        with pytest.raises(ValidationError):
+            NoteDraft(title=value, body="b")
+        with pytest.raises(ValidationError):
+            ReminderDraft(text=value, due_at=T0)
+
+    @pytest.mark.parametrize("value", [True, "5", 5.0])
+    def test_integer_inputs_are_not_coerced(self, value: object) -> None:
+        with pytest.raises(ValidationError):
+            EmailSearch.model_validate({"limit": value})
+        with pytest.raises(ValidationError):
+            ReadDocument.model_validate({"doc_id": "d", "max_chars": value})
+
+    def test_reminder_text_cannot_be_blank_and_note_body_may_be_unknown(self) -> None:
+        with pytest.raises(ValidationError):
+            Reminder(reminder_id="r", text="", due_at=T0, created_at=None)
+        assert Note(note_id="n", title=None, body=None, created_at=None).body is None
 
     def test_email_message_has_no_silent_defaults(self) -> None:
         with pytest.raises(ValidationError) as exc:
@@ -149,6 +187,15 @@ def test_email_draft_runs_without_confirmation_and_audit_hides_body() -> None:
     assert params is not None
     assert params["body"] == REDACTED
     assert params["to"] == ["f***@example.com"]
+
+
+def test_audit_masks_subject_and_reminder_text() -> None:
+    env = Env()
+    env.submit("email.create_draft", DRAFT | {"subject": "Private matter"})
+    env.submit("reminders.create", {"text": "Take medicine", "due_at": "2026-10-15T01:00:00Z"})
+    dumped = str([e.params for e in env.audit.events])
+    assert "Private matter" not in dumped
+    assert "Take medicine" not in dumped
 
 
 @pytest.mark.parametrize(

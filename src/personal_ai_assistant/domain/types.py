@@ -15,6 +15,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    Strict,
     StringConstraints,
     model_validator,
 )
@@ -45,8 +46,20 @@ Instant = Annotated[
     AwareDatetime, BeforeValidator(_strict_datetime_input), AfterValidator(_whole_minute_offset)
 ]
 
+# Bare addr-spec only: no display names, quotes, separators or comments, so one
+# value can never smuggle in a second recipient. IDN domains must be punycode.
 EmailAddress = Annotated[
-    str, StringConstraints(strip_whitespace=True, max_length=254, pattern=r"^[^@\s]+@[^@\s]+$")
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        max_length=254,
+        pattern=r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$",
+    ),
+]
+
+# Single-line free text (subjects, titles): no control characters such as CR/LF.
+SingleLine = Annotated[
+    str, StringConstraints(strip_whitespace=True, pattern=r"^[^\x00-\x1f\x7f]*$")
 ]
 
 
@@ -70,4 +83,4 @@ Identifier = Annotated[str, StringConstraints(min_length=1, max_length=512, patt
 SearchText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 
 DEFAULT_SEARCH_LIMIT = 20
-SearchLimit = Annotated[int, Field(ge=1, le=100)]
+SearchLimit = Annotated[int, Strict(), Field(ge=1, le=100)]

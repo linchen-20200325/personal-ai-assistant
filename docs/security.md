@@ -40,7 +40,8 @@
 ## 已知限制與後續 Batch 的要求
 
 - **外部內容不受信任（prompt injection）**：Email 內文、文件內容、行事曆描述等由 provider 取得的文字，在 B3 送入 LLM 時必須標示為資料而非指令；寫入類動作仍一律經 risk gate。V2 規劃：讀過外部內容後提高 WRITE_LOW 的確認要求（taint escalation）。
-- **Email**：目前只有讀取與存草稿（DRAFT），沒有寄送 tool。寄送屬 WRITE_HIGH，加入前需客戶裁示。Audit 中 `body` 欄位一律遮蔽、收件人地址遮蔽 local part。
+- **Email**：目前只有讀取與存草稿（DRAFT），沒有寄送 tool。寄送屬 WRITE_HIGH，加入前需客戶裁示。收件人只接受單一純 addr-spec（防止夾帶額外收件人）；主旨等單行欄位拒絕控制字元（CR/LF）。Audit 中 `body`、`subject`、`text` 欄位遮蔽，收件人地址遮蔽 local part。
+- **DRAFT 不受 `writes_enabled` 限制**：依核准的風險模型，DRAFT 可自主執行，因此即使寫入關閉，仍可建立遠端草稿（不會寄出）。若日後希望草稿也需確認或有數量上限，屬產品規則調整。
 
 - **確認畫面（B3 CLI）**：必須由程式從 `PendingAction.params_json` 產生，不得使用 planner 撰寫的摘要；顯示時需 escape 控制字元與 bidi / 零寬字元（例如 U+202E、U+200B），避免標題被視覺偽裝。
 - **Pending 寫入 audit 的順序**：pending 記錄先建立、再寫 `action.pending`。若此 audit 失敗，會留下一筆尚未記錄的 pending；但它之後的批准（`confirmation.approved`）與執行（`action.started`）都必須先成功寫入 audit，所以任何實際執行仍有完整紀錄。

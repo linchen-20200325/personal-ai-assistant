@@ -11,13 +11,24 @@ dependencies = ["pydantic>=2.9,<3"]
 anthropic = [
     "anthropic>=1.13,<2",
 ]
+google = [
+    "google-api-python-client>=2.201,<3",
+    "google-auth>=2.62,<3",
+    "google-auth-oauthlib>=1.5,<2",
+    "keyring>=25.7,<26",
+]
 
 [project.scripts]
 pai = "personal_ai_assistant.cli:main"
+pai-google-auth = "personal_ai_assistant.google_auth_cli:main"
 
 [dependency-groups]
 dev = [
     "anthropic>=1.13,<2",
+    "google-api-python-client>=2.201,<3",
+    "google-auth>=2.62,<3",
+    "google-auth-oauthlib>=1.5,<2",
+    "keyring>=25.7,<26",
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-cov>=6.0",
@@ -42,6 +53,10 @@ allowed-confusables = ["（", "）", "，", "：", "；", "？", "！"]
 # The only places allowed to import the Anthropic SDK (adapter boundary).
 "src/personal_ai_assistant/adapters/anthropic_model.py" = ["TID251"]
 "tests/test_anthropic_adapter.py" = ["TID251"]
+# The only places allowed to import Google client / OAuth / keyring libraries.
+"src/personal_ai_assistant/adapters/google_*.py" = ["TID251"]
+"tests/test_google_*.py" = ["TID251"]
+"tests/fakes/google_calendar.py" = ["TID251"]
 
 # The core must stay LLM- and transport-neutral (docs/architecture.md).
 # LLM / MCP SDKs may only enter through a dedicated adapter under
@@ -50,11 +65,22 @@ allowed-confusables = ["（", "）", "，", "：", "；", "？", "！"]
 "anthropic".msg = "Core must stay provider-neutral; add an adapter instead."
 "openai".msg = "Core must stay provider-neutral; add an adapter instead."
 "mcp".msg = "Core must stay transport-neutral; add an adapter instead."
+"google".msg = "Google libraries belong in adapters/google_*.py only."
+"googleapiclient".msg = "Google libraries belong in adapters/google_*.py only."
+"google_auth_oauthlib".msg = "Google libraries belong in adapters/google_*.py only."
+"google_auth_httplib2".msg = "Google libraries belong in adapters/google_*.py only."
+"httplib2".msg = "Google libraries belong in adapters/google_*.py only."
+"keyring".msg = "Secret storage belongs in adapters/google_auth.py only."
 
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+# Untyped third-party packages used only inside adapters/google_*.py.
+module = ["googleapiclient.*", "google_auth_oauthlib.*", "google_auth_httplib2", "httplib2"]
+ignore_missing_imports = true
 
 [tool.pydantic-mypy]
 init_forbid_extra = true

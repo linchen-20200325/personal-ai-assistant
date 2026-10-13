@@ -9,11 +9,12 @@ import os
 from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from personal_ai_assistant.domain.types import Identifier
 from personal_ai_assistant.safety.gate import Policy
 
 DEFAULT_AUDIT_LOG_PATH = Path("var/audit.jsonl")
@@ -26,6 +27,9 @@ class Settings(BaseModel):
     audit_log_path: Path
     # IANA zone the planner resolves relative dates in; None = host local zone.
     timezone: str | None = None
+    # Where calendar data comes from. "google" = read-only Google Calendar adapter.
+    calendar_provider: Literal["none", "google"] = "none"
+    google_calendar_id: Identifier = "primary"
 
     @field_validator("timezone")
     @classmethod
@@ -52,8 +56,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         policy["auto_write_low"] = frozenset(n.strip() for n in auto.split(",") if n.strip())
     if (ttl := get("CONFIRMATION_TTL_SECONDS")) is not None:
         policy["confirmation_ttl"] = timedelta(seconds=int(ttl))
-    return Settings(
-        policy=Policy.model_validate(policy),
-        audit_log_path=Path(get("AUDIT_LOG_PATH") or DEFAULT_AUDIT_LOG_PATH),
-        timezone=get("TIMEZONE"),
-    )
+    values: dict[str, Any] = {
+        "policy": Policy.model_validate(policy),
+        "audit_log_path": Path(get("AUDIT_LOG_PATH") or DEFAULT_AUDIT_LOG_PATH),
+        "timezone": get("TIMEZONE"),
+    }
+    if (calendar := get("CALENDAR_PROVIDER")) is not None:
+        values["calendar_provider"] = calendar
+    if (calendar_id := get("GOOGLE_CALENDAR_ID")) is not None:
+        values["google_calendar_id"] = calendar_id
+    return Settings.model_validate(values)

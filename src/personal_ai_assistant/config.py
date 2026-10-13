@@ -1,8 +1,8 @@
 """Settings from environment variables (see .env.example).
 
-No secrets are defined yet; provider credentials arrive with their adapters
-and must be typed as ``SecretStr`` and read from the environment / a secret
-manager, never from source code.
+Core settings hold no secrets. Provider credentials belong to their adapters
+(e.g. ``adapters/anthropic_model.py``), are typed as ``SecretStr`` and read
+from the environment / a secret manager, never from source code.
 """
 
 import os
@@ -10,8 +10,9 @@ from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from personal_ai_assistant.safety.gate import Policy
 
@@ -23,6 +24,18 @@ class Settings(BaseModel):
 
     policy: Policy
     audit_log_path: Path
+    # IANA zone the planner resolves relative dates in; None = host local zone.
+    timezone: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_zone(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                ZoneInfo(value)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise ValueError("unknown IANA time zone") from None
+        return value
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -42,4 +55,5 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     return Settings(
         policy=Policy.model_validate(policy),
         audit_log_path=Path(get("AUDIT_LOG_PATH") or DEFAULT_AUDIT_LOG_PATH),
+        timezone=get("TIMEZONE"),
     )

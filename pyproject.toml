@@ -7,8 +7,17 @@ requires-python = ">=3.12"
 # Runtime dependencies are kept minimal on purpose; see docs/architecture.md.
 dependencies = ["pydantic>=2.9,<3"]
 
+[project.optional-dependencies]
+anthropic = [
+    "anthropic>=1.13,<2",
+]
+
+[project.scripts]
+pai = "personal_ai_assistant.cli:main"
+
 [dependency-groups]
 dev = [
+    "anthropic>=1.13,<2",
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-cov>=6.0",
@@ -25,12 +34,18 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "S", "PT", "RUF", "TID", "DTZ"]
+# User-facing text is Traditional Chinese; full-width punctuation is intended.
+allowed-confusables = ["（", "）", "，", "：", "；", "？", "！"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
+# The only places allowed to import the Anthropic SDK (adapter boundary).
+"src/personal_ai_assistant/adapters/anthropic_model.py" = ["TID251"]
+"tests/test_anthropic_adapter.py" = ["TID251"]
 
 # The core must stay LLM- and transport-neutral (docs/architecture.md).
-# LLM / MCP SDKs may only enter through a dedicated adapter in a later batch.
+# LLM / MCP SDKs may only enter through a dedicated adapter under
+# personal_ai_assistant/adapters/ (per-file exemption above).
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "anthropic".msg = "Core must stay provider-neutral; add an adapter instead."
 "openai".msg = "Core must stay provider-neutral; add an adapter instead."

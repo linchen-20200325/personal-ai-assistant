@@ -53,3 +53,12 @@ def test_invalid_values_fail_at_startup(env: dict[str, str]) -> None:
 def test_reads_process_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ASSISTANT_WRITES_ENABLED", "1")
     assert load_settings().policy.writes_enabled is True
+
+
+def test_timezone_is_validated() -> None:
+    assert load_settings({}).timezone is None
+    assert load_settings({"ASSISTANT_TIMEZONE": "Asia/Taipei"}).timezone == "Asia/Taipei"
+    with pytest.raises(ValidationError):
+        load_settings({"ASSISTANT_TIMEZONE": "Mars/Base"})
+    with pytest.raises(ValidationError):
+        load_settings({"ASSISTANT_TIMEZONE": "../../etc/passwd"})

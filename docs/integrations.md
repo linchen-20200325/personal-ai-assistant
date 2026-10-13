@@ -8,6 +8,7 @@
 | `EmailProvider` | Gmail API | `gmail.readonly`（restricted scope）；草稿需 `gmail.compose`（**此 scope 同時允許寄信**，「不寄信」僅由程式碼保證） | 同上；restricted scope 的驗證限制需實測 | 同上；是否允許建立草稿 |
 | `DocumentProvider` | Google Drive API | 優先 `drive.file`（非敏感）；全域搜尋需 `drive.readonly`（restricted） | 同上 | 搜尋範圍與 scope 取捨 |
 | `NoteProvider` | 本機 SQLite / Notion / Google Docs 等 | 視後端而定 | 依選定後端 | **筆記存放位置**（涉及個資保存） |
+| `StructuredModel`（LLM） | Anthropic Messages API（已實作：`adapters/anthropic_model.py`） | API key（`ANTHROPIC_API_KEY`） | Anthropic Console 建立 key；設定用量上限 | 是否改用其他模型 / 供應商 |
 | `ReminderProvider` | 本機儲存 + 通知通道，或 Google Tasks / Calendar | 視後端而定 | 依選定後端；提醒送達需要排程與通知通道 | **存放位置與通知通道** |
 
 ## 共通注意事項

@@ -31,6 +31,9 @@
 | 7 | provider 失敗不偽裝成空資料 | `ToolResult` validator；executor 將非 `ToolResult` 回傳視為 FAILED | contract test、executor test |
 | 8 | naive datetime → DENY | `AwareDatetime`；另拒絕數字 / 數字字串 timestamp（避免被靜默解讀為 UTC）與非整分鐘 offset（避免 digest 不穩定） | |
 | 9 | Audit 遮蔽 secrets | `AuditEvent` 建構時遮蔽；驗證錯誤只記位置/類型，planner 送來的多餘 key 名稱以 `<extra>` 取代；tool 例外只記類型名稱；provider 錯誤字串在寫入 audit 與回傳 planner 前都經遮蔽 | 寫入磁碟後檢查 |
+| 16 | Google 只有唯讀 | 只要求 `calendar.readonly`；登入後 granted scope 必須完全相同才保存；載入時 scope 不符即拒用；adapter `create_event` 一律拒絕且不發請求；CLI 在 Google 模式不註冊寫入 tool | `test_google_auth.py`、`test_google_calendar.py`、`test_architecture.py` |
+| 17 | Google token 不外洩 | 只存 OS keyring，拒絕無 keyring / 明文 backend；錯誤訊息固定，不含回應內容或 token；OAuth client 檔必須在 repo 外 | `test_google_auth.py` |
+| 18 | Provider 資料不被捏造 | 未提供 → `None`；無法表示 → `None` + `PARTIAL`；全天事件無時區不猜；分頁截斷標示；回應形狀錯誤 → `ERROR` | `test_google_calendar.py`、contract test |
 | 10 | Planner 無法繞過 executor | `PlannedAction` 只有 `tool`、`params`；executor 公開介面僅 `specs/submit/execute_approved`；tool 實例為私有；AST 架構測試確保只有 executor 呼叫 `.run()` | `test_executor.py` |
 | 11 | LLM 輸出一律本地驗證、不猜測 | 嚴格 JSON（拒 NaN/Infinity、重複 key）、封閉 schema（`extra="forbid"`）、缺欄位不補預設、型別不轉換、大小上限；任一動作無效 → 整份計畫拒絕 | `test_llm_planner.py`、`test_orchestrator.py` |
 | 12 | LLM 無法提升權限 | `Plan` 無 risk/approval 欄位；風險由 tool 決定；WRITE_HIGH（例如含 attendees 的行程）即使在 `auto_write_low` 白名單仍需確認 | `test_orchestrator.py` |
@@ -73,7 +76,7 @@
 ## Secrets 與隱私
 
 - 不得 commit token、API key、密碼或 OAuth credentials；`.gitignore` 已涵蓋 `.env*`、`credentials*.json`、`token*.json`、`client_secret*.json`、`*.pem`、`*.key`。
-- `.env.example` 只含 placeholder。唯一的 secret 是 `ANTHROPIC_API_KEY`（`SecretStr`，只經環境變數提供）；Google 憑證隨 B4 adapter 引入。
+- `.env.example` 只含 placeholder。Secrets：`ANTHROPIC_API_KEY`（`SecretStr`，只經環境變數提供）；Google OAuth token（refresh token、client id/secret）只存 OS keyring；OAuth client JSON 只以 repo 外路徑傳給 `pai-google-auth login`，程式不複製、不印出其內容。
 - CI 以 gitleaks 掃描完整 git 歷史。測試中的合成假值以 `gitleaks:allow` 標註。
 - Audit：參數中 key 名稱符合 `token|secret|passw|authoriz|api_key|cookie|credential|session|body|content` 的值會被遮蔽；自由文字中的憑證指派（`key=value`、`key: value`、JSON `"key": "value"`、`Authorization: Basic …`）、Bearer token 與 Email local part 會被遮蔽；字串先截斷至 256 字元再比對，regex 皆為有界量詞，避免 ReDoS。這是 best effort，**不得**把 secrets 放在一般欄位的自由文字中。
 - Audit 檔案以 `0600` 權限建立，預設位於 `var/`（已 gitignore）。

@@ -2,8 +2,8 @@
 
 私人「個人全能 AI 助理」的核心函式庫。設計原則：**一個 Orchestrator + 明確的 tool / provider 邊界 + 每個 side effect 前都有風險閘門**。
 
-> 目前狀態：Batch 3（LLM Planner / Orchestrator、Anthropic adapter、CLI 人工確認）。
-> 尚未串接任何真實資料服務或 OAuth（provider 皆回 `UNAVAILABLE`）。實際進度以 `main`、PR 與 CI 為準。
+> 目前狀態：Batch 4（Google Calendar 唯讀 adapter，OAuth token 存 OS keyring）。
+> Gmail / Drive / 筆記 / 提醒尚未串接（回 `UNAVAILABLE`）。實際進度以 `main`、PR 與 CI 為準。
 
 ## 架構一覽
 
@@ -46,6 +46,8 @@ uv sync --extra anthropic                   # 或 pip install 'personal-ai-assis
 export ANTHROPIC_API_KEY=...                # 只放在環境變數 / secret manager
 uv run pai "明天下午有什麼行程？"
 ```
+
+接上 Google Calendar（唯讀）：見 [docs/integrations.md](docs/integrations.md#google-calendar-唯讀設定b4)。
 
 READ 類動作自動執行；需要確認的動作會顯示由程式產生的確認畫面，必須輸入 `yes` 才會執行。
 寫入預設關閉（`ASSISTANT_WRITES_ENABLED=false`）。

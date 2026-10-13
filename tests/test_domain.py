@@ -5,9 +5,10 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft, TimeRange
+from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft
 from personal_ai_assistant.domain.result import DataStatus, Provenance, ToolResult
 from personal_ai_assistant.domain.risk import RiskLevel
+from personal_ai_assistant.domain.types import TimeRange
 
 TPE = timezone(timedelta(hours=8))
 NOW = datetime(2026, 10, 13, 9, 0, tzinfo=TPE)

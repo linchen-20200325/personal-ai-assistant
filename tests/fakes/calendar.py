@@ -3,8 +3,9 @@
 from collections.abc import Iterable
 
 from personal_ai_assistant.clock import Clock
-from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft, TimeRange
+from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft
 from personal_ai_assistant.domain.result import Provenance, ToolResult
+from personal_ai_assistant.domain.types import TimeRange
 
 SOURCE = "fake_calendar"
 

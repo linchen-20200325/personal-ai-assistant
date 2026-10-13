@@ -9,8 +9,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft, TimeRange
+from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft
 from personal_ai_assistant.domain.result import DataStatus
+from personal_ai_assistant.domain.types import TimeRange
 from personal_ai_assistant.providers.calendar import CalendarProvider
 from tests.fakes.calendar import FakeCalendarProvider
 from tests.fakes.clock import FakeClock

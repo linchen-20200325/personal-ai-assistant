@@ -180,6 +180,11 @@ def _http_failure(exc: HttpError) -> _Failure:
         return _Failure("Google Calendar rate limit reached; try again later", DataStatus.ERROR)
     if status == 401:
         return _Failure(f"Google authorization was rejected; {LOGIN_HINT}", DataStatus.UNAVAILABLE)
+    if status == 403 and reasons & {"accessNotConfigured", "SERVICE_DISABLED"}:
+        return _Failure(
+            "Google Calendar API is not enabled for this OAuth client's project",
+            DataStatus.UNAVAILABLE,
+        )
     if status == 403:
         return _Failure("no permission to read this calendar", DataStatus.UNAVAILABLE)
     if status == 404:

@@ -194,6 +194,70 @@ def calendar_service_factory(
     return factory
 
 
+type Check = tuple[bool, str]
+
+
+def check_client_file(client_secrets: Path) -> list[Check]:
+    """Read-only checks of an OAuth client file. Messages never contain secret values."""
+    try:
+        path = client_secrets.expanduser().resolve(strict=True)
+    except OSError:
+        return [(False, "OAuth client file not found")]
+    results: list[Check] = []
+    if not path.is_file():
+        return [(False, "path is not a file")]
+    results.append((not inside_git_repository(path), "file is outside any git repository"))
+    results.append((not _readable_by_others(path), "file is private (chmod 600)"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [*results, (False, "file is valid JSON")]
+    if not isinstance(data, dict):
+        return [*results, (False, "file is a Google OAuth client JSON")]
+    if "installed" not in data:
+        kind = "Web application" if "web" in data else "unknown"
+        return [*results, (False, f"client type is Desktop app (found: {kind})")]
+    results.append((True, "client type is Desktop app"))
+    client = data["installed"]
+    if not isinstance(client, dict):
+        return [*results, (False, "client section is an object")]
+    required = ("client_id", "client_secret", "auth_uri", "token_uri")
+    missing = [key for key in required if not isinstance(client.get(key), str) or not client[key]]
+    results.append(
+        (not missing, f"required fields present{f' (missing: {missing})' if missing else ''}")
+    )
+    client_id = client.get("client_id")
+    results.append(
+        (
+            isinstance(client_id, str) and client_id.endswith(".apps.googleusercontent.com"),
+            "client_id is a Google OAuth client id",
+        )
+    )
+    results.append((client.get("token_uri") == TOKEN_URI, "token_uri is Google's endpoint"))
+    redirects = client.get("redirect_uris", ["http://localhost"])
+    loopback = isinstance(redirects, list) and any(
+        isinstance(u, str) and u.startswith(("http://localhost", "http://127.0.0.1"))
+        for u in redirects
+    )
+    results.append((loopback, "loopback redirect allowed (http://localhost)"))
+    return results
+
+
+def check_token_store(store: TokenStore) -> list[Check]:
+    """Keyring usability and stored-token compatibility, without revealing the token."""
+    try:
+        raw = store.load()
+    except GoogleAuthError as exc:
+        return [(False, f"OS keyring usable: {exc}")]
+    results: list[Check] = [(True, "OS keyring usable")]
+    if raw is None:
+        return [*results, (True, "no stored token yet (run login)")]
+    parsed = _parse_token(raw)
+    if isinstance(parsed, str):
+        return [*results, (False, f"stored token: {parsed}")]
+    return [*results, (True, "stored token is calendar.readonly-only and loadable")]
+
+
 def inside_git_repository(path: Path) -> bool:
     """A ``.git`` in any parent. Bare "dotfiles" repos (``--git-dir``) are not detectable."""
     return any((parent / ".git").exists() for parent in path.parents)

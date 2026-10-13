@@ -439,3 +439,81 @@ def test_world_readable_client_file_is_refused(tmp_path: Path) -> None:
     path.chmod(0o644)
     with pytest.raises(GoogleAuthError, match="chmod 600"):
         login(path, make_store(MemoryKeyring()), flow_factory=factory_for(FakeFlow(None), []))
+
+
+# --- pai-google-auth check (existing setup, read-only) -----------------------------
+
+DESKTOP = {
+    "installed": {
+        "client_id": "123-abc.apps.googleusercontent.com",
+        "project_id": "synthetic",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_secret": CLIENT_SECRET,
+        "redirect_uris": ["http://localhost"],
+    }
+}
+
+
+def write_client(tmp_path: Path, data: Any, mode: int = 0o600) -> Path:
+    path = tmp_path / "existing.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
+def test_check_accepts_existing_desktop_client_without_printing_secret(tmp_path: Path) -> None:
+    path = write_client(tmp_path, DESKTOP)
+    code, out = run_cli(["check", "--client-secrets", str(path)], make_store(MemoryKeyring()))
+    assert code == google_auth_cli.EXIT_OK
+    assert "✘" not in out
+    assert CLIENT_SECRET not in out
+    assert "123-abc" not in out
+
+
+@pytest.mark.parametrize(
+    ("data", "mode", "problem"),
+    [
+        ({"web": DESKTOP["installed"]}, 0o600, "found: Web application"),
+        (DESKTOP, 0o644, "chmod 600"),
+        (
+            {"installed": {k: v for k, v in DESKTOP["installed"].items() if k != "client_secret"}},
+            0o600,
+            "missing: ['client_secret']",
+        ),
+        (
+            {"installed": DESKTOP["installed"] | {"redirect_uris": ["https://example.com/cb"]}},
+            0o600,
+            "loopback",
+        ),
+        (
+            {"installed": DESKTOP["installed"] | {"token_uri": "https://evil.example.com"}},
+            0o600,
+            "token_uri",
+        ),
+        ("[]", 0o600, "OAuth client JSON"),
+    ],
+)
+def test_check_reports_problems(tmp_path: Path, data: Any, mode: int, problem: str) -> None:
+    path = write_client(tmp_path, data, mode)
+    code, out = run_cli(["check", "--client-secrets", str(path)], make_store(MemoryKeyring()))
+    assert code == google_auth_cli.EXIT_FAILED
+    failed = [line for line in out.splitlines() if line.startswith("✘")]
+    assert any(problem in line for line in failed), out
+    assert CLIENT_SECRET not in out
+
+
+def test_check_reports_keyring_and_old_token_compatibility(tmp_path: Path) -> None:
+    path = write_client(tmp_path, DESKTOP)
+    no_keyring = KeyringTokenStore(fail.Keyring())  # type: ignore[no-untyped-call]
+    code, out = run_cli(["check", "--client-secrets", str(path)], no_keyring)
+    assert code == google_auth_cli.EXIT_FAILED
+    assert "✘ OS keyring usable: no secure OS keyring" in out
+    broad = store_with(TOKEN | {"scopes": ["https://www.googleapis.com/auth/calendar"]})
+    code, out = run_cli(["check", "--client-secrets", str(path)], broad)
+    assert code == google_auth_cli.EXIT_FAILED
+    assert "unexpected scopes" in out
+    assert REFRESH not in out
+    code, out = run_cli(["check", "--client-secrets", str(path)], store_with(TOKEN))
+    assert code == google_auth_cli.EXIT_OK
+    assert "calendar.readonly-only" in out

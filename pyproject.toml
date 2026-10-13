@@ -1,0 +1,63 @@
+[project]
+name = "personal-ai-assistant"
+version = "0.1.0"
+description = "Personal AI assistant core: risk-gated tool execution over replaceable providers."
+readme = "README.md"
+requires-python = ">=3.12"
+# Runtime dependencies are kept minimal on purpose; see docs/architecture.md.
+dependencies = ["pydantic>=2.9,<3"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.12"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "S", "PT", "RUF", "TID"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+# The core must stay LLM- and transport-neutral (docs/architecture.md).
+# LLM / MCP SDKs may only enter through a dedicated adapter in a later batch.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"anthropic".msg = "Core must stay provider-neutral; add an adapter instead."
+"openai".msg = "Core must stay provider-neutral; add an adapter instead."
+"mcp".msg = "Core must stay transport-neutral; add an adapter instead."
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["personal_ai_assistant"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Regression floor only. Safety guarantees are asserted by behavioural tests,
+# not by this number; do not add tests just to move it.
+fail_under = 80

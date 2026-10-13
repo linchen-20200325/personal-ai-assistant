@@ -16,6 +16,6 @@
 - Token 不得寫入 repository 或原始碼；存放方式（例如 `~/.config` 下 0600 權限檔案或 OS keyring）於 B4 前裁示。
 - Adapter 必須：把 provider 錯誤轉為 `ToolResult.failed(...)`；錯誤字串不得包含憑證；不得以空清單或空字串代替未取得的資料；清單須正確設定 `has_more`。
 - `Identifier` 是不透明字串，可能含 `/`、`?`、`%` 等字元；adapter 組 URL 時必須對 path segment 做 percent-encode，不得直接拼接。
-- Email 地址只接受純 addr-spec（無顯示名稱、引號、分隔符）；國際化網域需先轉 punycode。
+- Email 地址只接受純 addr-spec（無顯示名稱、引號、分隔符）；國際化網域需先轉 punycode。provider 回傳不符合此格式的地址（引號 local part、EAI、無網域點）時，adapter 應將該欄位設為 `None` 並以 `PARTIAL` + `missing` 回報，不得猜測或改寫地址。
 - 每個新 adapter 都要加入對應 `tests/contracts/` 的 `PROVIDERS` 清單，以錄製的合成回應通過同一套 contract test。
 - 本機已存在的 ChatGPT / Claude 端 Google connector 與本 repository 無關，不代表本專案已取得任何授權。

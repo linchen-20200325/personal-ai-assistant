@@ -57,9 +57,9 @@ EmailAddress = Annotated[
     ),
 ]
 
-# Single-line free text (subjects, titles): no control characters such as CR/LF.
+# Single-line free text (subjects, titles): no C0/C1 controls or Unicode line separators.
 SingleLine = Annotated[
-    str, StringConstraints(strip_whitespace=True, pattern=r"^[^\x00-\x1f\x7f]*$")
+    str, StringConstraints(strip_whitespace=True, pattern=r"^[^\x00-\x1f\x7f-\x9f\u2028\u2029]*$")
 ]
 
 

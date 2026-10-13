@@ -96,7 +96,9 @@ class TestValidation:
         with pytest.raises(ValidationError):
             EmailDraft(to=(address,), subject="s", body="b")
 
-    @pytest.mark.parametrize("value", ["Dinner\r\nBcc: spy@example.com", "a\x00b", "tab\there"])
+    @pytest.mark.parametrize(
+        "value", ["Dinner\r\nBcc: spy@example.com", "a\x00b", "tab\there", "a\u2028b", "a\x85b"]
+    )
     def test_single_line_fields_reject_control_characters(self, value: str) -> None:
         with pytest.raises(ValidationError):
             EmailDraft(to=("a@example.com",), subject=value, body="b")

@@ -40,4 +40,4 @@ uv run pytest --cov          # 測試
 
 ## 工作流程
 
-`main` 受保護於流程上：feature branch → PR → CI 全綠 → review → merge。不 force push `main`。
+`main` 只透過 PR 變更：feature branch → PR → CI 全綠 → review → merge。不 force push `main`。

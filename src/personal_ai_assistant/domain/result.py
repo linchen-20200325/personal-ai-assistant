@@ -79,3 +79,17 @@ class ToolResult[T](BaseModel):
     @property
     def succeeded(self) -> bool:
         return self.status in (DataStatus.OK, DataStatus.PARTIAL)
+
+
+class Page[T](BaseModel):
+    """A bounded slice of a larger result set.
+
+    ``has_more`` tells the analysis layer whether the list is complete: True or
+    False when the provider knows, ``None`` when it cannot tell. It has no
+    default, so an adapter must state it explicitly.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    items: tuple[T, ...]
+    has_more: bool | None

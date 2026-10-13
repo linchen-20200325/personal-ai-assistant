@@ -14,6 +14,7 @@ from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
+    Field,
     StringConstraints,
     model_validator,
 )
@@ -60,3 +61,13 @@ class TimeRange(BaseModel):
         if self.end <= self.start:
             raise ValueError("end must be after start")
         return self
+
+
+# Opaque provider identifier: printable ASCII, no whitespace.
+Identifier = Annotated[str, StringConstraints(min_length=1, max_length=512, pattern=r"^[!-~]+$")]
+
+# Plain keywords; adapters translate them into provider query syntax.
+SearchText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+
+DEFAULT_SEARCH_LIMIT = 20
+SearchLimit = Annotated[int, Field(ge=1, le=100)]

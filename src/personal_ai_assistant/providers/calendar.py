@@ -2,8 +2,9 @@
 
 from typing import Protocol
 
-from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft, TimeRange
+from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft
 from personal_ai_assistant.domain.result import ToolResult
+from personal_ai_assistant.domain.types import TimeRange
 
 
 class CalendarProvider(Protocol):

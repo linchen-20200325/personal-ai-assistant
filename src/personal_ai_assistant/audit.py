@@ -23,7 +23,8 @@ REDACTED = "[REDACTED]"
 MAX_TEXT_LENGTH = 256
 _MAX_DEPTH = 8
 _SENSITIVE_KEY = re.compile(
-    r"token|secret|passw|authori[sz]|api[_-]?key|cookie|credential|session|body|content",
+    r"token|secret|passw|authori[sz]|api[_-]?key|cookie|credential|session|body|content"
+    r"|subject|^text$",
     re.IGNORECASE,
 )
 # Standalone bearer tokens ("Bearer <long token>").

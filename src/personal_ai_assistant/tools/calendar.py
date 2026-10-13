@@ -1,8 +1,9 @@
 """Calendar tools."""
 
-from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft, TimeRange
+from personal_ai_assistant.domain.calendar import CalendarEvent, EventDraft
 from personal_ai_assistant.domain.result import ToolResult
 from personal_ai_assistant.domain.risk import RiskLevel
+from personal_ai_assistant.domain.types import TimeRange
 from personal_ai_assistant.providers.calendar import CalendarProvider
 from personal_ai_assistant.tools.base import Tool, ToolSpec
 
